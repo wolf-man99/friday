@@ -1,0 +1,217 @@
+@import '@fontsource-variable/bricolage-grotesque';
+@import '@fontsource-variable/dm-sans';
+@import '@fontsource/space-mono/400.css';
+@import '@fontsource/space-mono/700.css';
+@import '@fontsource/caveat/600.css';
+@import '@fontsource/caveat/700.css';
+@import 'tailwindcss';
+
+/* -----------------------------------------------------------------------------
+   Design tokens — the single source for Friday's visual language.
+   Components read these; screens never hardcode colours, borders or shadows.
+   -------------------------------------------------------------------------- */
+@theme {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  /* Core */
+  --color-ink: #111111;
+  --color-canvas: #faf9f6;
+  --color-paper: #ffffff;
+  --color-orange: #ff5a1f;
+  --color-orange-press: #e8470d;
+  --color-peach: #fbe0d3;
+  --color-muted: #5c5750; /* secondary text, 6.8:1 on canvas */
+  --color-line: #e7e2da; /* light separators inside dense lists */
+
+  /* Category accents — surfaces only, always with ink text (≥ 6:1) */
+  --color-pink: #ff7ad9;
+  --color-lime: #c6f24e;
+  --color-purple: #b69cff;
+  --color-yellow: #ffd43b;
+  --color-sky: #7fd1ff;
+  --color-mint: #7de2b4;
+
+  /* Semantic — text-safe on canvas, paper and peach (≥ 4.5:1) */
+  --color-positive: #146c42;
+  --color-negative: #b42318;
+  --color-warning: #8a5100;
+
+  /* Typography */
+  --font-display: 'Bricolage Grotesque Variable', 'Arial Black', system-ui, sans-serif;
+  --font-sans: 'DM Sans Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Space Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --font-hand: 'Caveat', 'Comic Sans MS', cursive;
+
+  /* Radii */
+  --radius-control: 1rem;
+  --radius-card: 1.75rem;
+  --radius-pill: 999px;
+
+  /* Offset shadows — decorative only (box-shadow never shifts layout) */
+  --shadow-brutal-sm: 2px 2px 0 0 var(--color-ink);
+  --shadow-brutal: 4px 4px 0 0 var(--color-ink);
+  --shadow-brutal-lg: 6px 6px 0 0 var(--color-ink);
+  --shadow-brutal-orange: 4px 4px 0 0 var(--color-ink), 8px 8px 0 0 var(--color-orange);
+  --shadow-none: 0 0 0 0 transparent;
+
+  /* Motion */
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-pop: pop 180ms var(--ease-snap);
+  --animate-rise: rise 220ms ease-out;
+}
+
+@keyframes pop {
+  from {
+    transform: scale(0.94);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+   Base
+   -------------------------------------------------------------------------- */
+@layer base {
+  :root {
+    --border-strong: 3px;
+    --border-regular: 2px;
+    --nav-clearance: calc(7.5rem + env(safe-area-inset-bottom));
+    color-scheme: light;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100dvh;
+    background: var(--color-canvas);
+    overscroll-behavior-y: none;
+  }
+
+  /* Visible, chunky focus ring everywhere — never removed. */
+  :focus-visible {
+    outline: 3px solid var(--color-ink);
+    outline-offset: 3px;
+    border-radius: 0.5rem;
+  }
+
+  button,
+  [role='button'],
+  a {
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Numbers line up in lists and totals. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  dialog::backdrop {
+    background: rgb(17 17 17 / 0.45);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* -----------------------------------------------------------------------------
+   Shared surface recipes (used by the primitives in src/components/ui)
+   -------------------------------------------------------------------------- */
+@layer components {
+  .outline-strong {
+    border: var(--border-strong) solid var(--color-ink);
+  }
+
+  .outline-regular {
+    border: var(--border-regular) solid var(--color-ink);
+  }
+
+  /* Small uppercase monospaced metadata labels */
+  .label-mono {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1.3;
+    text-transform: uppercase;
+  }
+
+  /* Handwritten microcopy */
+  .scribble {
+    font-family: var(--font-hand);
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .display {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 0.95;
+  }
+
+  /* Tactile press: shadow collapses as the element moves into it. */
+  .pressable {
+    transition:
+      transform 90ms ease-out,
+      box-shadow 90ms ease-out,
+      background-color 120ms ease-out;
+  }
+  .pressable:active:not(:disabled):not([aria-disabled='true']) {
+    transform: translate(3px, 3px);
+    box-shadow: var(--shadow-none);
+  }
+
+  .safe-top {
+    padding-top: max(env(safe-area-inset-top), 0.75rem);
+  }
+
+  .nav-clearance {
+    padding-bottom: var(--nav-clearance);
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}

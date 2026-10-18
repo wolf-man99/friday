@@ -35,9 +35,12 @@ integration tests, Playwright.
 
 The whole schema — tables, constraints, row-level security, views and
 functions — is one migration: `supabase/migrations/20261018000000_friday_init.sql`.
+**That is the only file to run in Supabase.** The SQL under `tests/db/` is for
+local testing; it creates fake users and refuses to run in a Supabase project.
 
 **Option A — SQL editor (simplest):** Supabase dashboard → *SQL Editor* → *New
-query* → paste the file's contents → *Run*.
+query* → paste the file's contents → *Run*. Run it once; it is not designed to
+be re-run on a database that already has the schema.
 
 **Option B — Supabase CLI:**
 
@@ -88,8 +91,9 @@ npm run build       # production build + service worker
 ```
 
 **Database tests** apply the migration to a throwaway local PostgreSQL (with a
-stub of Supabase's `auth` schema) and check ledger maths, constraints, RLS
-isolation between users and recurring idempotency:
+stub of Supabase's `auth` schema and its non-superuser roles) and check ledger
+maths, constraints, RLS isolation between users, sign-up as Supabase's auth role
+and recurring idempotency. Never point them at Supabase:
 
 ```bash
 PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres npm run test:db
@@ -113,8 +117,8 @@ Playwright's Chromium (`npx playwright install chromium`, or set
 ## Project layout
 
 ```
-supabase/migrations/   schema, RLS, views, RPCs (the source of truth)
-supabase/tests/        SQL integration tests + local auth stub
+supabase/migrations/   schema, RLS, views, RPCs — the only SQL to run in Supabase
+tests/db/              local-only SQL integration tests + Supabase auth/role stub
 src/lib/               money, dates/timezones, recurrence, CSV, validation (pure, tested)
 src/data/              typed data-access layer + React Query hooks
 src/components/ui/     design-system primitives (Button, Card, PillSwitch, Dialog, Toast…)

@@ -95,7 +95,13 @@ async function handleAuth(req, res, url) {
     if (passwords.has(email)) return send(res, 422, { code: 422, error_code: 'user_already_exists', msg: 'User already registered' })
     const id = randomUUID()
     const metadata = body.data ?? {}
-    sql(`insert into auth.users (id, email, raw_user_meta_data) values (:'p1', :'p2', :'p3'::jsonb)`, id, email, JSON.stringify(metadata))
+    // As GoTrue does: the non-superuser auth role inserts, and the trigger runs.
+    sql(
+      `set role supabase_auth_admin; insert into auth.users (id, email, raw_user_meta_data) values (:'p1', :'p2', :'p3'::jsonb)`,
+      id,
+      email,
+      JSON.stringify(metadata),
+    )
     const user = { id, email, password: body.password, metadata }
     passwords.set(email, user)
     return send(res, 200, session(user))

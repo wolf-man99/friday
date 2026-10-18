@@ -3,7 +3,7 @@ import { describeSchedule, nextAfter, upcomingDates, type Schedule } from './rec
 
 const monthlyEnd: Schedule = { startDate: '2026-01-31', cadence: 'monthly', intervalCount: 1 }
 
-// These cases mirror supabase/tests/ledger_test.sql so the UI preview and the
+// These cases mirror tests/db/ledger_test.sql so the UI preview and the
 // database agree on every due date.
 describe('nextAfter', () => {
   it.each<[Schedule, string, string]>([

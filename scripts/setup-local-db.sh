@@ -9,9 +9,9 @@ DB="${1:-friday_e2e}"
 
 psql -v ON_ERROR_STOP=1 -q -d postgres -c "drop database if exists \"$DB\" with (force)" >/dev/null
 psql -v ON_ERROR_STOP=1 -q -d postgres -c "create database \"$DB\"" >/dev/null
-psql -v ON_ERROR_STOP=1 -q -d "$DB" -f supabase/tests/supabase_stub.sql >/dev/null 2>&1
+psql -v ON_ERROR_STOP=1 -q -d "$DB" -f tests/db/local_supabase_stub.sql >/dev/null 2>&1
 for migration in supabase/migrations/*.sql; do
-  psql -v ON_ERROR_STOP=1 -q -d "$DB" -f "$migration" >/dev/null
+  psql -v ON_ERROR_STOP=1 -q -d "$DB" -c "set role friday_owner" -f "$migration" >/dev/null
 done
 psql -v ON_ERROR_STOP=1 -q -d "$DB" -c "alter role authenticator password 'authenticator'" >/dev/null
 echo "database $DB ready"

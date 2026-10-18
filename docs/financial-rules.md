@@ -2,7 +2,7 @@
 
 These are the rules the database enforces and the app displays. They are
 implemented once, in `supabase/migrations/`, and covered by
-`supabase/tests/ledger_test.sql`.
+`tests/db/ledger_test.sql`.
 
 ## Money
 

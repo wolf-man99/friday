@@ -1,4 +1,5 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { Eye, EyeOff } from 'lucide-react'
+import { useId, useState, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import { cn } from './cn'
 
 interface FieldShellProps {
@@ -121,6 +122,51 @@ export function SelectField({ label, hint, error, className, children, ...rest }
         >
           {children}
         </select>
+      )}
+    </FieldShell>
+  )
+}
+
+interface PasswordFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
+  label: string
+  hint?: ReactNode
+  error?: string | null
+}
+
+/** Password input with a show/hide toggle (a real button with a state-describing name). */
+export function PasswordField({ label, hint, error, className, ...rest }: PasswordFieldProps) {
+  const [visible, setVisible] = useState(false)
+  return (
+    <FieldShell label={label} hint={hint} error={error} className={className}>
+      {({ id, describedBy }) => (
+        <div className={cn(control, 'flex min-h-12 items-center gap-1 pr-1 focus-within:outline-3 focus-within:outline-ink')}>
+          <input
+            id={id}
+            type={visible ? 'text' : 'password'}
+            aria-describedby={describedBy}
+            aria-invalid={error ? true : undefined}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-h-11 w-full bg-transparent focus:outline-none"
+            {...rest}
+          />
+          <button
+            type="button"
+            onClick={() => setVisible((v) => !v)}
+            aria-pressed={visible}
+            aria-controls={id}
+            aria-label={visible ? 'Hide password' : 'Show password'}
+            title={visible ? 'Hide password' : 'Show password'}
+            className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-peach"
+          >
+            {visible ? (
+              <EyeOff aria-hidden="true" className="size-5" strokeWidth={2.25} />
+            ) : (
+              <Eye aria-hidden="true" className="size-5" strokeWidth={2.25} />
+            )}
+          </button>
+        </div>
       )}
     </FieldShell>
   )

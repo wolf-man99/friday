@@ -4,7 +4,7 @@ import { useAuth } from '@/app/auth'
 import { Wordmark } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { TextField } from '@/components/ui/Field'
+import { PasswordField, TextField } from '@/components/ui/Field'
 import { PillSwitch } from '@/components/ui/PillSwitch'
 import { InlineError } from '@/components/ui/States'
 import { friendlyError } from '@/lib/errors'
@@ -118,9 +118,8 @@ export function SignIn() {
             error={fieldErrors.email}
           />
           {mode !== 'reset' && (
-            <TextField
+            <PasswordField
               label="Password"
-              type="password"
               required
               error={fieldErrors.password}
               autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}

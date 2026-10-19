@@ -4,7 +4,7 @@ import { useAuth } from '@/app/auth'
 import { Wordmark } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { TextField } from '@/components/ui/Field'
+import { PasswordField } from '@/components/ui/Field'
 import { InlineError } from '@/components/ui/States'
 import { friendlyError } from '@/lib/errors'
 import { supabase } from '@/lib/supabase'
@@ -36,7 +36,7 @@ export function ResetPassword() {
           <InlineError message="This reset link has expired or was already used. Request a new one from the sign-in screen." />
         ) : (
           <form onSubmit={submit} noValidate className="flex flex-col gap-4">
-            <TextField label="New password" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <PasswordField label="New password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
             {error && <InlineError message={error} />}
             <Button type="submit" variant="primary" size="lg" block loading={busy}>
               Save password

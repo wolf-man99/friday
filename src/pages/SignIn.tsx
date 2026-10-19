@@ -23,6 +23,7 @@ export function SignIn() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
 
   if (session) return <Navigate to={from} replace />
 
@@ -30,23 +31,24 @@ export function SignIn() {
     event.preventDefault()
     setError(null)
     setNotice(null)
-    if (!email.includes('@')) return setError('Enter your email address')
-    if (mode !== 'reset' && password.length < 8) return setError('Passwords need at least 8 characters')
+    const errors = validate(mode, { name, email, password })
+    setFieldErrors(errors)
+    if (Object.keys(errors).length > 0) return
     setBusy(true)
     try {
       if (mode === 'sign-in') {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email, password })
+        const { error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
         if (authError) throw authError
       } else if (mode === 'sign-up') {
         const { data, error: authError } = await supabase.auth.signUp({
-          email,
+          email: email.trim(),
           password,
-          options: { data: { display_name: name.trim() || undefined }, emailRedirectTo: window.location.origin },
+          options: { data: { display_name: name.trim() }, emailRedirectTo: window.location.origin },
         })
         if (authError) throw authError
         if (!data.session) setNotice('Check your inbox — confirm your email, then sign in.')
       } else {
-        const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
+        const { error: authError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
           redirectTo: `${window.location.origin}/reset-password`,
         })
         if (authError) throw authError
@@ -87,6 +89,7 @@ export function SignIn() {
               setMode(next)
               setError(null)
               setNotice(null)
+              setFieldErrors({})
             }}
           />
         ) : (
@@ -94,13 +97,32 @@ export function SignIn() {
         )}
         <form onSubmit={submit} noValidate className="flex flex-col gap-4">
           {mode === 'sign-up' && (
-            <TextField label="Your name (optional)" autoComplete="given-name" value={name} onChange={(e) => setName(e.target.value)} />
+            <TextField
+              label="Your name"
+              required
+              autoComplete="given-name"
+              maxLength={80}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              error={fieldErrors.name}
+            />
           )}
-          <TextField label="Email" type="email" autoComplete="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <TextField
+            label="Email"
+            type="email"
+            required
+            autoComplete="email"
+            inputMode="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            error={fieldErrors.email}
+          />
           {mode !== 'reset' && (
             <TextField
               label="Password"
               type="password"
+              required
+              error={fieldErrors.password}
               autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -122,6 +144,7 @@ export function SignIn() {
           className="min-h-11 text-sm font-semibold underline underline-offset-4"
           onClick={() => {
             setMode(mode === 'reset' ? 'sign-in' : 'reset')
+            setFieldErrors({})
             setError(null)
             setNotice(null)
           }}
@@ -132,4 +155,20 @@ export function SignIn() {
       <p className="text-center text-sm text-muted">Private by default. Your records are visible only to you.</p>
     </main>
   )
+}
+
+type FieldErrors = Partial<Record<'name' | 'email' | 'password', string>>
+
+/** Name (sign-up), email and password are all required; each gets its own message. */
+export function validate(mode: Mode, values: { name: string; email: string; password: string }): FieldErrors {
+  const errors: FieldErrors = {}
+  const email = values.email.trim()
+  if (mode === 'sign-up' && !values.name.trim()) errors.name = 'Enter your name'
+  if (!email) errors.email = 'Enter your email address'
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.email = 'That doesn’t look like an email address'
+  if (mode !== 'reset') {
+    if (!values.password) errors.password = 'Enter your password'
+    else if (mode === 'sign-up' && values.password.length < 8) errors.password = 'Passwords need at least 8 characters'
+  }
+  return errors
 }

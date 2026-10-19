@@ -11,6 +11,8 @@ interface ToastInput {
   message: string
   tone?: 'success' | 'error' | 'info'
   action?: ToastAction
+  /** Several actions, e.g. Edit and Undo after a save. */
+  actions?: ToastAction[]
   /** Milliseconds; undo toasts default to a longer window. */
   duration?: number
 }
@@ -36,7 +38,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       const id = nextId.current++
       // One at a time keeps Undo unambiguous.
       setToasts([{ ...toast, id }])
-      window.setTimeout(() => dismiss(id), toast.duration ?? (toast.action ? 7000 : 3500))
+      const hasActions = Boolean(toast.action || toast.actions?.length)
+      window.setTimeout(() => dismiss(id), toast.duration ?? (hasActions ? 8000 : 3500))
     },
     [dismiss],
   )
@@ -66,18 +69,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               <Check aria-hidden="true" className="size-5 shrink-0 text-lime" strokeWidth={3} />
             )}
             <p className="flex-1 text-sm font-semibold">{toast.message}</p>
-            {toast.action && (
+            {[...(toast.actions ?? []), ...(toast.action ? [toast.action] : [])].map((action, index, all) => (
               <button
+                key={action.label}
                 type="button"
-                className="min-h-11 rounded-pill bg-orange px-4 font-display text-sm font-extrabold text-ink outline-regular"
+                className={cn(
+                  'min-h-11 shrink-0 rounded-pill px-4 font-display text-sm font-extrabold outline-regular',
+                  index === all.length - 1 ? 'bg-orange text-ink' : 'bg-paper text-ink',
+                )}
                 onClick={async () => {
                   dismiss(toast.id)
-                  await toast.action!.onClick()
+                  await action.onClick()
                 }}
               >
-                {toast.action.label}
+                {action.label}
               </button>
-            )}
+            ))}
           </div>
         ))}
       </div>

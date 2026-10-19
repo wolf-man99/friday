@@ -2,7 +2,7 @@
 
 These are the rules the database enforces and the app displays. They are
 implemented once, in `supabase/migrations/`, and covered by
-`tests/db/ledger_test.sql`.
+`tests/db/ledger_test.sql` and `tests/db/capture_test.sql`.
 
 ## Money
 
@@ -27,6 +27,17 @@ implemented once, in `supabase/migrations/`, and covered by
 A transfer is one row describing one logical movement. It cannot be split
 into "an expense plus an income", and the reports never read the `transfers`
 table for income or spending.
+
+## Recording and correcting entries
+
+- New entries go through `record_entry`, which takes a client-generated
+  **idempotency key**. The same key always yields the same single entry, even
+  when the request is retried after a lost response or sent twice at once.
+- Edits go through `update_entry` with the version the form loaded; an entry
+  changed elsewhere in the meantime is never silently overwritten. An edit can
+  switch an entry between expense, income and transfer.
+- Undo and restore (`set_entry_voided`) are soft deletes and are idempotent.
+- Every create, edit, undo and restore writes a row to `ledger_audit`.
 
 ## Balances
 

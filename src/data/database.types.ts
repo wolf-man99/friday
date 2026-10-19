@@ -15,6 +15,8 @@ export type ProfileRow = Timestamps & {
   display_name: string | null
   timezone: string
   base_currency: string
+  /** The account Quick Add preselects (migration 0002). */
+  default_account_id: string | null
 }
 
 export type AccountRow = Timestamps & {
@@ -52,8 +54,13 @@ export type TransactionRow = Timestamps & {
   category_id: string | null
   occurred_at: string
   note: string | null
+  merchant: string | null
+  idempotency_key: string | null
+  created_via: CreatedVia
   deleted_at: string | null
 }
+
+export type CreatedVia = 'manual' | 'quick_add' | 'recurring' | 'import'
 
 export type TransferRow = Timestamps & {
   id: string
@@ -64,6 +71,8 @@ export type TransferRow = Timestamps & {
   currency: string
   occurred_at: string
   note: string | null
+  idempotency_key: string | null
+  created_via: CreatedVia
   deleted_at: string | null
 }
 
@@ -124,6 +133,7 @@ export type LedgerEntryRow = Timestamps & {
   currency: string
   occurred_at: string
   note: string | null
+  merchant: string | null
 }
 
 export type PeriodSummaryRow = {
@@ -139,6 +149,17 @@ export type CategoryBreakdownRow = {
   category_id: string | null
   total_minor: number
   transaction_count: number
+}
+
+export type RecordEntryRow = {
+  kind: EntryKind
+  id: string
+  /** false: this request key was already used; the original entry is returned. */
+  created: boolean
+  /** false: the earlier request had different financial details. */
+  matches: boolean
+  voided: boolean
+  updated_at: string
 }
 
 export type CashflowTrendRow = {
@@ -215,6 +236,38 @@ export type Database = {
         }
         Returns: string
       }
+      record_entry: {
+        Args: {
+          p_idempotency_key: string
+          p_kind: EntryKind
+          p_amount_minor: number
+          p_account_id: string
+          p_destination_account_id?: string | null
+          p_category_id?: string | null
+          p_occurred_at?: string | null
+          p_note?: string | null
+          p_merchant?: string | null
+          p_created_via?: CreatedVia
+        }
+        Returns: RecordEntryRow[]
+      }
+      update_entry: {
+        Args: {
+          p_kind: EntryKind
+          p_id: string
+          p_expected_updated_at: string | null
+          p_new_kind: EntryKind
+          p_amount_minor: number
+          p_account_id: string
+          p_destination_account_id?: string | null
+          p_category_id?: string | null
+          p_occurred_at?: string | null
+          p_note?: string | null
+          p_merchant?: string | null
+        }
+        Returns: string
+      }
+      set_entry_voided: { Args: { p_kind: EntryKind; p_id: string; p_voided: boolean }; Returns: string }
       skip_recurring_occurrence: { Args: { p_rule_id: string; p_due_date: string }; Returns: undefined }
       delete_all_my_data: { Args: Record<string, never>; Returns: undefined }
     }

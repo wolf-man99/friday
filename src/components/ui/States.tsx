@@ -69,7 +69,7 @@ export function InlineError({ message, onRetry, className }: InlineErrorProps) {
         ) : (
           <CircleAlert aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-negative" strokeWidth={2.5} />
         )}
-        <p className="font-semibold">{offline ? 'You’re offline. Reconnect to load your data.' : message}</p>
+        <p className="font-semibold">{message}</p>
       </div>
       {onRetry && (
         <Button size="sm" onClick={onRetry}>

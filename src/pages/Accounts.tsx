@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ListOrdered, Plus } from 'lucide-react'
+import { Archive, ArchiveRestore, ListOrdered, Plus, Star } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useSettings } from '@/app/settings'
@@ -15,7 +15,7 @@ import { EmptyState, InlineError } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
 import { TONE_BG, TONE_LABEL, TONES, type AccentTone } from '@/components/ui/tones'
 import type { AccountBalanceRow, AccountType } from '@/data/database.types'
-import { useSaveAccount } from '@/data/hooks'
+import { useSaveAccount, useUpdateProfile } from '@/data/hooks'
 import { formatDate } from '@/lib/dates'
 import { friendlyError } from '@/lib/errors'
 import { formatAmountInput, formatMoney, minorToDecimalString, parseAmountToMinor, MAX_AMOUNT_MINOR } from '@/lib/money'
@@ -231,10 +231,11 @@ export function AccountForm({ account, onSaved, submitLabel }: AccountFormProps)
 
 export function AccountEditor() {
   const { id } = useParams()
-  const { accountsById } = useSettings()
+  const { accountsById, profile } = useSettings()
   const navigate = useNavigate()
   const toast = useToast()
   const save = useSaveAccount()
+  const updateProfile = useUpdateProfile()
   const [confirmArchive, setConfirmArchive] = useState(false)
   const account = id ? accountsById.get(id) : undefined
 
@@ -251,6 +252,10 @@ export function AccountEditor() {
     if (!account) return
     const archiving = account.status === 'active'
     try {
+      // An archived account can't take new entries, so it can't stay the default.
+      if (archiving && profile.default_account_id === account.id) {
+        await updateProfile.mutateAsync({ id: profile.id, patch: { default_account_id: null } })
+      }
       await save.mutateAsync({ id: account.id, values: { status: archiving ? 'archived' : 'active' } })
       setConfirmArchive(false)
       toast({ message: archiving ? `${account.name} archived` : `${account.name} is active again` })
@@ -265,6 +270,22 @@ export function AccountEditor() {
       <PageHeader title={account ? account.name : 'New account'} back="/accounts" />
 
       {account && <BalanceBreakdown account={account} />}
+
+      {account && account.status === 'active' && (
+        <QuickAddDefault
+          accountId={account.id}
+          isDefault={profile.default_account_id === account.id}
+          busy={updateProfile.isPending}
+          onToggle={async (makeDefault) => {
+            try {
+              await updateProfile.mutateAsync({ id: profile.id, patch: { default_account_id: makeDefault ? account.id : null } })
+              toast({ message: makeDefault ? `New entries will start in ${account.name}` : 'No default account — Quick Add uses your recent choice' })
+            } catch (error) {
+              toast({ message: friendlyError(error), tone: 'error' })
+            }
+          }}
+        />
+      )}
 
       <Card shadow="md">
         <AccountForm
@@ -347,6 +368,47 @@ function BalanceBreakdown({ account }: { account: AccountBalanceRow }) {
           icon={<ListOrdered aria-hidden="true" className="size-4" strokeWidth={2.5} />}
         >
           See its transactions
+        </LinkButton>
+      </div>
+    </Card>
+  )
+}
+
+function QuickAddDefault({
+  accountId,
+  isDefault,
+  busy,
+  onToggle,
+}: {
+  accountId: string
+  isDefault: boolean
+  busy: boolean
+  onToggle: (makeDefault: boolean) => void
+}) {
+  return (
+    <Card tone={isDefault ? 'lime' : 'paper'} className="flex flex-col gap-3">
+      <div className="flex items-start gap-3">
+        <Star aria-hidden="true" className="mt-0.5 size-5 shrink-0" strokeWidth={2.5} fill={isDefault ? 'currentColor' : 'none'} />
+        <div>
+          <h2 className="font-display text-lg font-extrabold tracking-tight">Quick Add default</h2>
+          <p className="text-sm">
+            {isDefault
+              ? 'New expenses and income start in this account. You can still switch before saving.'
+              : 'Make new entries start in this account instead of your most recent choice.'}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant={isDefault ? 'secondary' : 'primary'} loading={busy} onClick={() => onToggle(!isDefault)}>
+          {isDefault ? 'Stop using as default' : 'Make default'}
+        </Button>
+        <LinkButton
+          size="sm"
+          to={`/add?account=${accountId}`}
+          state={{ from: `/accounts/${accountId}` }}
+          icon={<Plus aria-hidden="true" className="size-4" strokeWidth={3} />}
+        >
+          Add entry here
         </LinkButton>
       </div>
     </Card>

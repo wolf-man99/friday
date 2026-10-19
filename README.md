@@ -5,7 +5,10 @@ a few taps, keep account balances that always reconcile, and see where the money
 went — in a loud, tactile, Riff-inspired interface.
 
 - **Quick add, amount first** — Expense / Income / Transfer, big amount field,
-  category tiles, last-used account preselected, Undo after every save.
+  smart account defaults, category suggestions from your own history (always
+  marked as suggestions), drafts that survive reloads, retries that can never
+  record an entry twice, and Edit / Undo after every save. Details in
+  [`docs/quick-add.md`](docs/quick-add.md).
 - **Accounts & balances** — cash, bank, credit cards and other accounts with
   opening balances. Balances are derived from the ledger, never stored.
 - **Transfers** move money between accounts without touching income or spending.
@@ -33,14 +36,25 @@ integration tests, Playwright.
 
 ### 1. Create the database schema
 
-The whole schema — tables, constraints, row-level security, views and
-functions — is one migration: `supabase/migrations/20261018000000_friday_init.sql`.
-**That is the only file to run in Supabase.** The SQL under `tests/db/` is for
+The schema — tables, constraints, row-level security, views and functions —
+lives in `supabase/migrations/`, one file per change, applied **in filename
+order**:
+
+| File | What it adds |
+| ---- | ------------ |
+| `20261018000000_friday_init.sql` | the whole v1 schema. Run once, on an empty project. |
+| `20261019000000_capture_service.sql` | Quick Add save service: merchant field, idempotent `record_entry`, `update_entry` with conflict detection, `set_entry_voided`, default account, audit trail. Additive — existing data is kept — and safe to re-run. |
+
+**These are the only files to run in Supabase.** The SQL under `tests/db/` is for
 local testing; it creates fake users and refuses to run in a Supabase project.
 
 **Option A — SQL editor (simplest):** Supabase dashboard → *SQL Editor* → *New
-query* → paste the file's contents → *Run*. Run it once; it is not designed to
-be re-run on a database that already has the schema.
+query* → paste one file's contents → *Run*; repeat for the next file. Each file
+runs as a single transaction, so a failure leaves the database unchanged.
+
+**Already running Friday?** Run only the files you haven't run yet. If the app
+is deployed before its migration, it shows *"Database needs an update"* instead
+of failing halfway through a save; run the missing file and tap *Try again*.
 
 **Option B — Supabase CLI:**
 
@@ -90,10 +104,12 @@ npm test            # unit + component tests (money, dates, recurrence, CSV, qui
 npm run build       # production build + service worker
 ```
 
-**Database tests** apply the migration to a throwaway local PostgreSQL (with a
+**Database tests** apply the migrations to a throwaway local PostgreSQL (with a
 stub of Supabase's `auth` schema and its non-superuser roles) and check ledger
-maths, constraints, RLS isolation between users, sign-up as Supabase's auth role
-and recurring idempotency. Never point them at Supabase:
+maths, constraints, RLS isolation between users, sign-up as Supabase's auth role,
+recurring idempotency, the capture service (idempotent saves, edit conflicts,
+undo, audit), upgrading a database that already holds data, and 8 concurrent
+replays of one save. Never point them at Supabase:
 
 ```bash
 PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres npm run test:db
@@ -102,7 +118,9 @@ PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres npm run test:db
 **End-to-end tests** run the real app against local PostgreSQL + PostgREST
 (behind a small fake auth gateway in `e2e/fake-supabase.mjs`) and walk the full
 path: sign up → accounts → income, expense, transfer → summaries → edit →
-delete/undo → CSV export, plus recurring confirm/skip.
+delete/undo → CSV export, plus recurring confirm/skip. The Quick Add suite
+drops requests and responses mid-save, reloads with a draft, edits one entry
+from two browsers and checks suggestions.
 
 ```bash
 PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres \
@@ -119,13 +137,14 @@ Playwright's Chromium (`npx playwright install chromium`, or set
 ```
 supabase/migrations/   schema, RLS, views, RPCs — the only SQL to run in Supabase
 tests/db/              local-only SQL integration tests + Supabase auth/role stub
-src/lib/               money, dates/timezones, recurrence, CSV, validation (pure, tested)
+src/lib/               money, dates/timezones, recurrence, CSV, validation, analytics (pure, tested)
+src/features/capture/  Quick Add logic: account defaults, category suggestions, drafts
 src/data/              typed data-access layer + React Query hooks
 src/components/ui/     design-system primitives (Button, Card, PillSwitch, Dialog, Toast…)
 src/components/finance/ finance components (TransactionRow, AccountCard, charts…)
 src/pages/             screens
 e2e/                   Playwright tests and the local fake Supabase gateway
-docs/                  financial rules, backup and restore
+docs/                  financial rules, Quick Add behaviour, backup and restore
 ```
 
 ## Backups

@@ -72,13 +72,14 @@ interface ConfirmDialogProps {
   title: string
   body: ReactNode
   confirmLabel: string
+  cancelLabel?: string
   onConfirm: () => void
   onCancel: () => void
   danger?: boolean
   busy?: boolean
 }
 
-export function ConfirmDialog({ open, title, body, confirmLabel, onConfirm, onCancel, danger, busy }: ConfirmDialogProps) {
+export function ConfirmDialog({ open, title, body, confirmLabel, cancelLabel = 'Cancel', onConfirm, onCancel, danger, busy }: ConfirmDialogProps) {
   return (
     <Dialog
       open={open}
@@ -87,7 +88,7 @@ export function ConfirmDialog({ open, title, body, confirmLabel, onConfirm, onCa
       footer={
         <>
           <Button block onClick={onCancel}>
-            Cancel
+            {cancelLabel}
           </Button>
           <Button block variant={danger ? 'ink' : 'primary'} loading={busy} onClick={onConfirm}>
             {confirmLabel}

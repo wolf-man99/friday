@@ -1,4 +1,4 @@
-import type { HTMLAttributes } from 'react'
+import { forwardRef, type HTMLAttributes } from 'react'
 import { cn } from './cn'
 import { TONE_BG, type SurfaceTone } from './tones'
 
@@ -20,11 +20,15 @@ export interface CardProps extends HTMLAttributes<HTMLElement> {
 }
 
 /** Thick-outline surface (OutlinedCard / OffsetShadowSurface in the TRD). */
-export function Card({ tone = 'paper', shadow = 'none', as: Tag = 'div', padded = true, className, ...rest }: CardProps) {
+export const Card = forwardRef<HTMLElement, CardProps>(function Card(
+  { tone = 'paper', shadow = 'none', as: Tag = 'div', padded = true, className, ...rest },
+  ref,
+) {
   return (
     <Tag
+      ref={ref as never}
       className={cn('rounded-card outline-strong', TONE_BG[tone], SHADOWS[shadow], padded && 'p-4', className)}
       {...rest}
     />
   )
-}
+})

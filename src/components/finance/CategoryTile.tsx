@@ -1,4 +1,4 @@
-import { Check } from 'lucide-react'
+import { Check, Sparkles } from 'lucide-react'
 import { cn } from '@/components/ui/cn'
 import { TONE_BG, toneOf } from '@/components/ui/tones'
 import { CategoryGlyph } from './icons'
@@ -8,23 +8,40 @@ interface CategoryTileProps {
   icon: string
   color: string
   selected: boolean
+  /** Selected by a suggestion the user hasn't confirmed yet. */
+  suggested?: boolean
   onSelect: () => void
 }
 
 /** Chunky selectable category tile. Selected = thicker outline, shadow and a check badge. */
-export function CategoryTile({ name, icon, color, selected, onSelect }: CategoryTileProps) {
+export function CategoryTile({ name, icon, color, selected, suggested, onSelect }: CategoryTileProps) {
+  const isSuggestion = selected && suggested
   return (
     <button
       type="button"
       aria-pressed={selected}
+      aria-label={isSuggestion ? `${name}, suggested — tap to confirm` : undefined}
       onClick={onSelect}
       className={cn(
         'pressable relative flex min-h-[5.25rem] flex-col items-center justify-center gap-1.5 rounded-[1.25rem] px-1.5 py-2 text-center',
         TONE_BG[toneOf(color)],
-        selected ? 'outline-strong shadow-brutal' : 'border-2 border-ink',
+        isSuggestion
+          ? 'border-[3px] border-dashed border-ink'
+          : selected
+            ? 'outline-strong shadow-brutal'
+            : 'border-2 border-ink',
       )}
     >
-      {selected && (
+      {isSuggestion && (
+        <span
+          aria-hidden="true"
+          className="label-mono absolute -top-2.5 left-1/2 flex -translate-x-1/2 items-center gap-0.5 whitespace-nowrap rounded-pill bg-paper px-1.5 py-0.5 text-[0.55rem] outline-regular"
+        >
+          <Sparkles className="size-2.5" strokeWidth={3} />
+          Suggested
+        </span>
+      )}
+      {selected && !isSuggestion && (
         <span
           aria-hidden="true"
           className="absolute -right-1.5 -top-1.5 grid size-6 place-items-center rounded-full bg-ink text-paper outline-regular"

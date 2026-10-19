@@ -64,13 +64,14 @@ export function Profile() {
         e.kind === 'transfer' ? '' : categoryName(e.category_id),
         e.kind === 'transfer' ? accountName(e.account_id) : '',
         e.kind === 'transfer' ? accountName(e.counter_account_id) : '',
+        e.merchant ?? '',
         e.note ?? '',
         e.id,
       ])
       downloadFile(
         `friday-transactions-${localDate(new Date(), profile.timezone)}.csv`,
         toCsv(
-          ['date', 'time', 'type', 'amount', 'currency', 'account', 'category', 'transfer_from', 'transfer_to', 'note', 'id'],
+          ['date', 'time', 'type', 'amount', 'currency', 'account', 'category', 'transfer_from', 'transfer_to', 'merchant', 'note', 'id'],
           rows,
         ),
       )

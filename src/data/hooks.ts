@@ -6,6 +6,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import type { UtcRange } from '@/lib/dates'
+import { isOutdatedSchema } from '@/lib/errors'
 import type { ValidEntry } from '@/lib/entry'
 import * as api from './api'
 import type {
@@ -36,6 +37,17 @@ export const keys = {
 }
 
 // --- Reads ------------------------------------------------------------------------
+
+/** Once per session: is the database on the newest migration? */
+export function useSchemaCheck() {
+  return useQuery({
+    queryKey: ['schema'],
+    queryFn: api.checkSchema,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: (count, error) => count < 2 && !isOutdatedSchema(error),
+  })
+}
 
 export function useProfile(enabled = true) {
   return useQuery({ queryKey: keys.profile, queryFn: api.fetchProfile, enabled, staleTime: 5 * 60_000 })
@@ -134,21 +146,26 @@ function useInvalidate() {
     Promise.all(queryKeys.map((queryKey) => client.invalidateQueries({ queryKey })))
 }
 
+export function useCaptureHistory() {
+  return useQuery({ queryKey: ['ledger', 'capture-history'], queryFn: () => api.fetchCaptureHistory(), staleTime: 60_000 })
+}
+
 export function useCreateEntry() {
   const invalidate = useInvalidate()
   return useMutation({
-    mutationFn: ({ entry, occurredAt }: { entry: ValidEntry; occurredAt: string }) =>
-      api.createEntry(entry, occurredAt),
-    onSuccess: () => invalidate(keys.ledger),
+    mutationFn: ({ entry, occurredAt, idempotencyKey }: { entry: ValidEntry; occurredAt: string; idempotencyKey: string }) =>
+      api.recordEntry(entry, occurredAt, idempotencyKey),
+    // Also after failures: a lost response may still have committed.
+    onSettled: () => invalidate(keys.ledger),
   })
 }
 
 export function useUpdateEntry() {
   const invalidate = useInvalidate()
   return useMutation({
-    mutationFn: (args: { previousKind: EntryKind; id: string; entry: ValidEntry; occurredAt: string }) =>
-      api.updateEntry(args.previousKind, args.id, args.entry, args.occurredAt),
-    onSuccess: () => invalidate(keys.ledger),
+    mutationFn: (args: { previousKind: EntryKind; id: string; expectedUpdatedAt: string | null; entry: ValidEntry; occurredAt: string }) =>
+      api.updateEntry(args.previousKind, args.id, args.expectedUpdatedAt, args.entry, args.occurredAt),
+    onSettled: () => invalidate(keys.ledger),
   })
 }
 
@@ -216,7 +233,7 @@ export function useSkipOccurrence() {
 export function useUpdateProfile() {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: Partial<Pick<ProfileRow, 'display_name' | 'timezone'>> }) =>
+    mutationFn: ({ id, patch }: { id: string; patch: Partial<Pick<ProfileRow, 'display_name' | 'timezone' | 'default_account_id'>> }) =>
       api.updateProfile(patch, id),
     onSuccess: (profile) => {
       client.setQueryData(keys.profile, profile)

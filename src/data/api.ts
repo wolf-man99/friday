@@ -4,6 +4,7 @@
 
 import { supabase } from '@/lib/supabase'
 import { zonedTimeToUtc, type UtcRange } from '@/lib/dates'
+import type { HistoryItem } from '@/features/capture/suggest'
 import type { ValidEntry } from '@/lib/entry'
 import type {
   AccountBalanceRow,
@@ -17,6 +18,7 @@ import type {
   LedgerEntryRow,
   PeriodSummaryRow,
   ProfileRow,
+  RecordEntryRow,
   RecurringOccurrenceRow,
   RecurringRuleInsert,
   RecurringRuleRow,
@@ -30,6 +32,19 @@ function unwrap<T>(result: { data: T; error: unknown }): NonNullable<T> {
   return result.data as NonNullable<T>
 }
 
+// --- Schema ------------------------------------------------------------------
+
+/**
+ * Reads a column added by the newest migration. Fails with an outdated-schema
+ * error when that migration hasn't been applied, so the app can say so up
+ * front instead of failing in the middle of a save.
+ */
+export async function checkSchema(): Promise<true> {
+  const { error } = await supabase.from('ledger_entries').select('merchant').limit(1)
+  if (error) throw error
+  return true
+}
+
 // --- Profile -----------------------------------------------------------------
 
 export async function fetchProfile(): Promise<ProfileRow> {
@@ -38,7 +53,10 @@ export async function fetchProfile(): Promise<ProfileRow> {
   return unwrap(await supabase.rpc('ensure_profile'))
 }
 
-export async function updateProfile(patch: Partial<Pick<ProfileRow, 'display_name' | 'timezone'>>, id: string) {
+export async function updateProfile(
+  patch: Partial<Pick<ProfileRow, 'display_name' | 'timezone' | 'default_account_id'>>,
+  id: string,
+) {
   return unwrap(await supabase.from('profiles').update(patch).eq('id', id).select().single())
 }
 
@@ -122,7 +140,7 @@ export async function fetchFeedPage(
   }
   const search = sanitiseSearch(filters.search ?? '')
   if (search) {
-    const terms = [`note.ilike.*${search}*`]
+    const terms = [`note.ilike.*${search}*`, `merchant.ilike.*${search}*`]
     if (options.searchCategoryIds?.length) terms.push(`category_id.in.(${options.searchCategoryIds.join(',')})`)
     query = query.or(terms.join(','))
   }
@@ -157,94 +175,85 @@ export function occurredAtFor(date: string, todayDate: string, timeZone: string)
   return zonedTimeToUtc(date, '12:00', timeZone).toISOString()
 }
 
-export async function createEntry(entry: ValidEntry, occurredAt: string): Promise<{ kind: EntryKind; id: string }> {
-  if (entry.kind === 'transfer') {
-    const row = unwrap(
-      await supabase
-        .from('transfers')
-        .insert({
-          source_account_id: entry.accountId,
-          destination_account_id: entry.destinationAccountId!,
-          amount_minor: entry.amountMinor,
-          occurred_at: occurredAt,
-          note: entry.note,
-        })
-        .select('id')
-        .single(),
-    )
-    return { kind: 'transfer', id: row.id }
-  }
-  const row = unwrap(
-    await supabase
-      .from('transactions')
-      .insert({
-        account_id: entry.accountId,
-        type: entry.kind,
-        amount_minor: entry.amountMinor,
-        category_id: entry.categoryId,
-        occurred_at: occurredAt,
-        note: entry.note,
-      })
-      .select('id')
-      .single(),
+/**
+ * Records a new entry through the database's capture service. The request key
+ * makes this safe to retry: a replay (double tap, lost response, second
+ * device) returns the entry committed first instead of creating another.
+ */
+export async function recordEntry(
+  entry: ValidEntry,
+  occurredAt: string,
+  idempotencyKey: string,
+): Promise<RecordEntryRow> {
+  const rows = unwrap(
+    await supabase.rpc('record_entry', {
+      p_idempotency_key: idempotencyKey,
+      p_kind: entry.kind,
+      p_amount_minor: entry.amountMinor,
+      p_account_id: entry.accountId,
+      p_destination_account_id: entry.destinationAccountId,
+      p_category_id: entry.categoryId,
+      p_occurred_at: occurredAt,
+      p_note: entry.note,
+      p_merchant: entry.merchant,
+      p_created_via: 'quick_add',
+    }),
   )
-  return { kind: entry.kind, id: row.id }
+  if (!rows[0]) throw new Error('Friday didn’t confirm the save. Try again — it won’t create a duplicate.')
+  return rows[0]
 }
 
+/**
+ * Edits an entry. `expectedUpdatedAt` is the version the user started from
+ * (the raw string from the API): if the entry changed since, nothing is
+ * written and a conflict error comes back. Returns the new version.
+ */
 export async function updateEntry(
   previousKind: EntryKind,
   id: string,
+  expectedUpdatedAt: string | null,
   entry: ValidEntry,
   occurredAt: string,
-): Promise<void> {
-  if ((previousKind === 'transfer') !== (entry.kind === 'transfer')) {
-    throw new Error('A transfer can’t be turned into income or an expense. Delete it and record a new entry.')
-  }
-  if (entry.kind === 'transfer') {
-    unwrap(
-      await supabase
-        .from('transfers')
-        .update({
-          source_account_id: entry.accountId,
-          destination_account_id: entry.destinationAccountId!,
-          amount_minor: entry.amountMinor,
-          occurred_at: occurredAt,
-          note: entry.note,
-        })
-        .eq('id', id)
-        .select('id')
-        .single(),
-    )
-    return
-  }
-  unwrap(
-    await supabase
-      .from('transactions')
-      .update({
-        account_id: entry.accountId,
-        type: entry.kind,
-        amount_minor: entry.amountMinor,
-        category_id: entry.categoryId,
-        occurred_at: occurredAt,
-        note: entry.note,
-      })
-      .eq('id', id)
-      .select('id')
-      .single(),
+): Promise<string> {
+  return unwrap(
+    await supabase.rpc('update_entry', {
+      p_kind: previousKind,
+      p_id: id,
+      p_expected_updated_at: expectedUpdatedAt,
+      p_new_kind: entry.kind,
+      p_amount_minor: entry.amountMinor,
+      p_account_id: entry.accountId,
+      p_destination_account_id: entry.destinationAccountId,
+      p_category_id: entry.categoryId,
+      p_occurred_at: occurredAt,
+      p_note: entry.note,
+      p_merchant: entry.merchant,
+    }),
   )
 }
 
-/** Soft delete: the row stays for undo/audit but leaves every total. */
+/** Void (Undo / delete) or restore. Idempotent: repeating it changes nothing. */
 export async function setEntryDeleted(kind: EntryKind, id: string, deleted: boolean): Promise<void> {
-  const table = kind === 'transfer' ? 'transfers' : 'transactions'
-  unwrap(
+  unwrap(await supabase.rpc('set_entry_voided', { p_kind: kind, p_id: id, p_voided: deleted }))
+}
+
+/** Recent income/expense entries (newest first) that power suggestions and shortcuts. */
+export async function fetchCaptureHistory(limit = 200): Promise<HistoryItem[]> {
+  const rows = unwrap(
     await supabase
-      .from(table)
-      .update({ deleted_at: deleted ? new Date().toISOString() : null })
-      .eq('id', id)
-      .select('id')
-      .single(),
+      .from('ledger_entries')
+      .select('kind, category_id, merchant, account_id, amount_minor')
+      .neq('kind', 'transfer')
+      .order('created_at', { ascending: false })
+      .limit(limit),
   )
+  return rows.map((row) => ({
+    kind: row.kind as TransactionType,
+    categoryId: row.category_id,
+    merchant: row.merchant,
+    accountId: row.account_id,
+    amountMinor: row.amount_minor,
+  }))
 }
 
 // --- Reports ----------------------------------------------------------------------

@@ -16,6 +16,7 @@ interface TransactionRowProps {
 }
 
 export function entryTitle(entry: LedgerEntryRow, category?: CategoryRow) {
+  if (entry.merchant) return entry.merchant
   if (entry.note) return entry.note
   if (entry.kind === 'transfer') return 'Transfer'
   return category?.name ?? 'Uncategorised'
@@ -27,7 +28,7 @@ export function TransactionRow({ entry, category, account, counterAccount, meta 
   const isTransfer = entry.kind === 'transfer'
   const detail = isTransfer
     ? `${account?.name ?? 'Account'} → ${counterAccount?.name ?? 'Account'}`
-    : [entry.note ? (category?.name ?? 'Uncategorised') : null, account?.name].filter(Boolean).join(' · ')
+    : [entry.note || entry.merchant ? (category?.name ?? 'Uncategorised') : null, account?.name].filter(Boolean).join(' · ')
 
   return (
     <Link

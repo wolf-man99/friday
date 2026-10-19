@@ -9,11 +9,12 @@ interface AmountInputProps {
   label?: string
   autoFocus?: boolean
   onEnter?: () => void
+  onBlur?: () => void
 }
 
 /** The amount-first field: the largest element on the add screen, numeric keypad on phones. */
 export const AmountInput = forwardRef<HTMLInputElement, AmountInputProps>(function AmountInput(
-  { value, onChange, error, label = 'Amount', autoFocus, onEnter },
+  { value, onChange, error, label = 'Amount', autoFocus, onEnter, onBlur },
   ref,
 ) {
   const id = useId()
@@ -40,6 +41,7 @@ export const AmountInput = forwardRef<HTMLInputElement, AmountInputProps>(functi
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `${id}-error` : undefined}
           onChange={(event) => onChange(formatAmountInput(event.target.value))}
+          onBlur={onBlur}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()

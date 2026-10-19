@@ -80,16 +80,44 @@ export function formatMoneyCompact(minor: number, currency: CurrencyCode = DEFAU
 }
 
 /**
- * Formats raw amount-field text with Indian grouping while the user types,
- * preserving a trailing decimal point and partial paise ("1234." → "1,234.").
+ * Formats amount-field text with Indian grouping as the user types
+ * ("123456.5" → "1,23,456.5"). It never changes the number itself: extra
+ * decimals, a minus sign or stray dots are kept so validation can explain
+ * them instead of the field silently rewriting what was typed or pasted.
+ * Only grouping commas, spaces and a pasted currency symbol are dropped.
  */
 export function formatAmountInput(raw: string): string {
-  const cleaned = raw.replace(/[^\d.]/g, '')
-  const firstDot = cleaned.indexOf('.')
-  const whole = (firstDot === -1 ? cleaned : cleaned.slice(0, firstDot)).replace(/^0+(?=\d)/, '')
-  const fraction = firstDot === -1 ? null : cleaned.slice(firstDot + 1).replace(/\./g, '').slice(0, 2)
-  const groupedWhole = whole === '' ? (fraction !== null ? '0' : '') : groupFormatter.format(Number(whole))
-  return fraction === null ? groupedWhole : `${groupedWhole}.${fraction}`
+  const cleaned = raw.replace(/[₹,\s]/g, '').replace(/^(rs\.?|inr)/i, '')
+  const match = /^(-?)(\d*)(\.(\d*))?$/.exec(cleaned)
+  if (!match) return cleaned
+  const [, sign, digits, dot, fraction = ''] = match
+  const whole = digits.replace(/^0+(?=\d)/, '')
+  const groupedWhole = whole === '' ? (dot ? '0' : '') : groupFormatter.format(Number(whole))
+  return `${sign}${groupedWhole}${dot ? `.${fraction}` : ''}`
+}
+
+export type AmountProblem = 'empty' | 'negative' | 'precision' | 'malformed' | 'zero' | 'too_large'
+
+/** Why amount text can't be saved, or null when it is a valid positive amount. */
+export function amountProblem(text: string): AmountProblem | null {
+  const cleaned = text.replace(/[₹,\s]/g, '')
+  if (cleaned === '') return 'empty'
+  if (/^-/.test(cleaned)) return 'negative'
+  if (/^\d*\.\d{3,}$/.test(cleaned)) return 'precision'
+  const minor = parseAmountToMinor(cleaned)
+  if (minor === null) return 'malformed'
+  if (minor === 0) return 'zero'
+  if (minor > MAX_AMOUNT_MINOR) return 'too_large'
+  return null
+}
+
+export const AMOUNT_PROBLEM_MESSAGE: Record<AmountProblem, string> = {
+  empty: 'Enter an amount',
+  negative: 'Amounts are always positive — pick Expense or Income for the direction',
+  precision: 'Use at most 2 decimal places (paise)',
+  malformed: 'Use numbers only, like 1250 or 1,250.50',
+  zero: 'Amount must be more than zero',
+  too_large: 'That amount is too large',
 }
 
 /** Tailwind text size that keeps a formatted amount on one line in a half-width card. */

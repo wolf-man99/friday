@@ -35,5 +35,5 @@ jobs:
       PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
-      - name: Migration + ledger, RLS and recurring tests
+      - name: Migrations + ledger, RLS, recurring, capture and upgrade tests
         run: scripts/test-db.sh

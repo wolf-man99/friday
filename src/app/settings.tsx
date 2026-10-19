@@ -1,8 +1,9 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import type { AccountBalanceRow, CategoryRow, ProfileRow } from '@/data/database.types'
-import { useAccounts, useCategories, useProfile, useRecurringSync } from '@/data/hooks'
+import { useAccounts, useCategories, useProfile, useRecurringSync, useSchemaCheck } from '@/data/hooks'
 import { today } from '@/lib/dates'
+import { isOutdatedSchema } from '@/lib/errors'
 import { SetupProblem } from './SetupProblem'
 import { Splash } from './Splash'
 
@@ -30,12 +31,15 @@ export function useSettings() {
 
 /**
  * Loads the profile, accounts and categories before showing the app, and
- * sends first-time users (no accounts yet) to onboarding.
+ * sends first-time users (no accounts yet) to onboarding. Also stops early if
+ * the database is behind the app (a migration wasn't applied), rather than
+ * letting saves fail later.
  */
 export function SettingsGate({ children }: { children: ReactNode }) {
   const profile = useProfile()
   const accounts = useAccounts()
   const categories = useCategories()
+  const schema = useSchemaCheck()
   const location = useLocation()
   useRecurringSync(profile.isSuccess)
 
@@ -52,8 +56,10 @@ export function SettingsGate({ children }: { children: ReactNode }) {
     }
   }, [profile.data, accounts.data, categories.data])
 
-  const error = profile.error ?? accounts.error ?? categories.error
-  if (error && !loaded) {
+  // Only a missing migration blocks; a flaky probe shouldn't lock anyone out.
+  const outdated = isOutdatedSchema(schema.error) ? schema.error : null
+  const error = (loaded ? null : (profile.error ?? accounts.error ?? categories.error)) ?? outdated
+  if (error) {
     return (
       <SetupProblem
         error={error}
@@ -61,11 +67,12 @@ export function SettingsGate({ children }: { children: ReactNode }) {
           void profile.refetch()
           void accounts.refetch()
           void categories.refetch()
+          void schema.refetch()
         }}
       />
     )
   }
-  if (!loaded) return <Splash />
+  if (!loaded || schema.isPending) return <Splash />
   // Recomputed every render so a session left open past midnight moves on.
   const value: SettingsValue = { ...loaded, todayDate: today(loaded.timeZone) }
 

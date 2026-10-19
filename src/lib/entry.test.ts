@@ -24,7 +24,22 @@ describe('validateEntry', () => {
       ok: false,
       errors: { amount: 'Amount must be more than zero' },
     })
-    expect(validateEntry({ ...base, amountText: '1.234' }).ok).toBe(false)
+    expect(validateEntry({ ...base, amountText: '1.234' })).toMatchObject({ errors: { amount: 'Use at most 2 decimal places (paise)' } })
+    expect(validateEntry({ ...base, amountText: '-5' }).ok).toBe(false)
+  })
+
+  it('reports an account that is no longer available instead of swapping it', () => {
+    const context = { availableAccountIds: new Set(['acc-2']) }
+    expect(validateEntry(base, context)).toMatchObject({ errors: { account: 'That account is no longer available — choose another' } })
+    expect(validateEntry({ ...base, accountId: 'acc-2' }, context).ok).toBe(true)
+  })
+
+  it('trims an optional merchant and limits its length', () => {
+    const ok = validateEntry({ ...base, merchant: '  Blue Tokai ' })
+    expect(ok.ok && ok.value.merchant).toBe('Blue Tokai')
+    expect(validateEntry({ ...base, merchant: 'm'.repeat(121) }).ok).toBe(false)
+    const transfer = validateEntry({ ...base, kind: 'transfer', destinationAccountId: 'acc-2', merchant: 'ignored' })
+    expect(transfer.ok && transfer.value.merchant).toBeNull()
   })
 
   it('needs an account', () => {

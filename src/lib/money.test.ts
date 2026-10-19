@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  amountProblem,
   formatAmountInput,
   formatMoney,
   formatMoneyCompact,
@@ -91,13 +92,38 @@ describe('formatAmountInput', () => {
     ['123456', '1,23,456'],
     ['1234.', '1,234.'],
     ['1234.5', '1,234.5'],
-    ['1234.567', '1,234.56'],
     ['.5', '0.5'],
     ['007', '7'],
-    ['1,2a3', '123'],
-    ['1.2.3', '1.23'],
+    ['₹ 1,250', '1,250'],
+    ['Rs.500', '500'],
   ])('%j → %j', (raw, expected) => {
     expect(formatAmountInput(raw)).toBe(expected)
+  })
+
+  it.each([
+    ['1234.567', '1,234.567'],
+    ['-50', '-50'],
+    ['1.2.3', '1.2.3'],
+    ['12a3', '12a3'],
+  ])('never silently changes the number: %j → %j', (raw, expected) => {
+    expect(formatAmountInput(raw)).toBe(expected)
+  })
+})
+
+describe('amountProblem', () => {
+  it.each([
+    ['', 'empty'],
+    ['-50', 'negative'],
+    ['12.345', 'precision'],
+    ['1.2.3', 'malformed'],
+    ['abc', 'malformed'],
+    ['0', 'zero'],
+    ['0.00', 'zero'],
+    ['10000000000.01', 'too_large'],
+    ['1,250.50', null],
+    ['0.01', null],
+  ])('%j → %s', (text, expected) => {
+    expect(amountProblem(text)).toBe(expected)
   })
 })
 

@@ -105,8 +105,8 @@ function DetailsStub() {
   return <p>details screen {location.pathname}</p>
 }
 
-function renderEdit(path: string) {
-  return render(
+function editTree(path: string) {
+  return (
     <MemoryRouter initialEntries={[path]}>
       <ToastProvider>
         <Routes>
@@ -115,8 +115,12 @@ function renderEdit(path: string) {
           <Route path="/activity" element={<p>activity screen</p>} />
         </Routes>
       </ToastProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
+}
+
+function renderEdit(path: string) {
+  return render(editTree(path))
 }
 
 const expenseRow = (patch = {}) => ({
@@ -500,5 +504,16 @@ describe('Editing an entry', () => {
     renderEdit('/entry/expense/e1/edit')
     expect(screen.getByText(/Voided entries can’t be edited/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the form (and what you typed) when a background refresh fails', async () => {
+    entryResult = { isPending: false, data: expenseRow(), error: null }
+    const { rerender } = renderEdit('/entry/expense/e1/edit')
+    await userEvent.clear(amountField())
+    await userEvent.type(amountField(), '300')
+    entryResult = { isPending: false, data: expenseRow(), error: new TypeError('Failed to fetch') }
+    rerender(editTree('/entry/expense/e1/edit'))
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument()
+    expect(amountField()).toHaveValue('300')
   })
 })

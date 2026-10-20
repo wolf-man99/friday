@@ -101,9 +101,12 @@ export function EntryDetail() {
       </div>
     )
   }
-  if (entryQuery.error || !entryQuery.data) {
+  // A failed background refetch keeps showing what was loaded (and any open
+  // form with its typed input and request key); only a first load that fails
+  // replaces the page.
+  if (!entryQuery.data) {
     // PostgREST's "no rows" for .single(): the id isn't one of yours.
-    if (!entryQuery.data && (entryQuery.error as { code?: string } | null)?.code === 'PGRST116') return <NotFound />
+    if ((entryQuery.error as { code?: string } | null)?.code === 'PGRST116') return <NotFound />
     return (
       <div>
         <PageHeader title="Details" back="/activity" />

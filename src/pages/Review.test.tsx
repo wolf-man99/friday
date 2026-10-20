@@ -262,6 +262,15 @@ describe('Review queue', () => {
     expect(screen.queryByRole('dialog', { name: 'Confirm it' })).not.toBeInTheDocument()
   })
 
+  it('steers a cancelled or declined payment to Ignore rather than recording it', async () => {
+    events = [sourceEvent({ parsed_entry_status: 'declined' })]
+    renderReview()
+    await userEvent.click(screen.getByRole('button', { name: /^Confirm Blue Tokai/ }))
+    const note = within(sheet('Confirm it')).getByRole('note')
+    expect(note).toHaveTextContent('this payment was declined, so no money moved')
+    expect(note).toHaveTextContent('choose Ignore')
+  })
+
   it('confirms with what the person corrected', async () => {
     events = [sourceEvent({ parsed_entry_status: 'pending' })]
     renderReview()

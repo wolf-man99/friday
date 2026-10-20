@@ -829,7 +829,7 @@ select tests.eq((select row(processing_status, link_type, resulting_transaction_
   row('imported', 'matched', true)::text, 'link: the evidence is that existing entry');
 select public.link_source_event(tests.id('ev:m-5'), 'expense', tests.id('C:ride-hold'));
 select tests.eq((select row(status, amount_minor)::text from public.transactions where id = tests.id('C:ride-hold')),
-  row('posted', 40000)::text, 'linking settlement evidence to a pending entry posts it');
+  row('posted', 52000)::text, 'linking settlement evidence to a pending entry posts it at the settled amount');
 select tests.eq((select count(*) from public.transactions), tests.num('C:entries@link'), 'linking creates no entry');
 select tests.throws($$select public.link_source_event(tests.id('ev:m-23'), 'expense', tests.id('C:shoes'))$$,
   'confirm it as a refund instead', 'link refuses an entry of a different kind');
@@ -885,8 +885,8 @@ select tests.eq((select row(review_events, review_entries, pending_entries)::tex
 select tests.eq((select row(pending_minor, review_count)::text from public.account_balances where id = tests.id('C:bank')),
   row(-60000, 0)::text, 'the bank shows the pending fuel hold');
 select tests.eq((select row(income, spending, refunds, refund_count, pending_count)::text from tests.month('2026-05')),
-  row(0, 446100, 82700, 2, 1)::text, 'May: every purchase counted once, however much evidence arrived');
-select tests.eq(tests.balance('C:bank'), tests.num('C:bank@imports') - 446100, 'the bank moved by exactly May''s net spending');
+  row(0, 458100, 82700, 2, 1)::text, 'May: every purchase counted once, however much evidence arrived');
+select tests.eq(tests.balance('C:bank'), tests.num('C:bank@imports') - 458100, 'the bank moved by exactly May''s net spending');
 
 -- link_source_event checks the linked entry's own type, so income evidence
 -- can't be swallowed by a purchase whatever kind the caller names.

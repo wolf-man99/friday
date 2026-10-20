@@ -102,7 +102,9 @@ export function EntryEditor() {
       )
     }
     if (entryQuery.isPending) return <EditorFrame title="Loading…" fallback={details}><LoadingBlock rows={4} /></EditorFrame>
-    if (entryQuery.error || !entryQuery.data || entryQuery.data.deleted_at) {
+    // Only a first load that fails replaces the form: a failed background
+    // refetch must never throw away someone's edits.
+    if (!entryQuery.data || entryQuery.data.deleted_at) {
       return (
         <EditorFrame title="Not found" fallback={details}>
           <InlineError

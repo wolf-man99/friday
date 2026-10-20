@@ -371,7 +371,15 @@ export async function updateLinkedEntry(
   kind: 'refund' | 'reversal',
   id: string,
   expectedUpdatedAt: string | null,
-  values: { amountMinor: number; accountId: string; occurredAt: string; note: string | null; merchant?: string | null },
+  values: {
+    amountMinor: number
+    accountId: string
+    occurredAt: string
+    note: string | null
+    merchant?: string | null
+    /** Only used for a refund recorded without its purchase; linked ones follow their original. */
+    categoryId?: string | null
+  },
   reason?: string | null,
 ): Promise<string> {
   return unwrap(
@@ -382,6 +390,7 @@ export async function updateLinkedEntry(
       p_new_kind: kind,
       p_amount_minor: values.amountMinor,
       p_account_id: values.accountId,
+      p_category_id: values.categoryId ?? null,
       p_occurred_at: values.occurredAt,
       p_note: values.note,
       p_merchant: values.merchant ?? null,
@@ -514,19 +523,27 @@ export async function fetchMatchCandidates(input: {
   return unwrap(await query.order('occurred_at', { ascending: false }).limit(20))
 }
 
-/** Posted purchases (or income) a refund/reversal could belong to, newest first. */
+export const OFFSET_CANDIDATES_PAGE = 30
+
+/**
+ * Posted purchases (or income) a refund/reversal could belong to, newest
+ * first. `search` matches merchant or note; raise `limit` to reach older ones.
+ */
 export async function fetchOffsetCandidates(input: {
   kinds: ('expense' | 'income')[]
   accountId?: string | null
   minAmountMinor?: number
   before?: string
+  search?: string
   limit?: number
 }): Promise<LedgerEntryRow[]> {
   let query = supabase.from('ledger_entries').select('*').in('kind', input.kinds).eq('status', 'posted')
   if (input.accountId) query = query.eq('account_id', input.accountId)
   if (input.minAmountMinor) query = query.gte('amount_minor', input.minAmountMinor)
   if (input.before) query = query.lte('occurred_at', input.before)
-  return unwrap(await query.order('occurred_at', { ascending: false }).limit(input.limit ?? 30))
+  const search = sanitiseSearch(input.search ?? '')
+  if (search) query = query.or(`merchant.ilike.*${search}*,note.ilike.*${search}*`)
+  return unwrap(await query.order('occurred_at', { ascending: false }).limit(input.limit ?? OFFSET_CANDIDATES_PAGE))
 }
 
 export interface ConfirmEventInput {

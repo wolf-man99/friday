@@ -46,7 +46,8 @@ counted. Deleting removes an entry you added by mistake (Undo restores it).
   when the request is retried after a lost response or sent twice at once.
 - Edits go through `update_entry` with the version the form loaded; an entry
   changed elsewhere in the meantime is never silently overwritten. An edit can
-  switch an entry between expense, income and transfer.
+  switch an entry between expense and income; a transfer stays a transfer
+  (delete it and record the right entry instead).
 - Delete/Undo and restore (`set_entry_deleted`; `set_entry_voided` is the
   same function under its pre-0003 name) are soft deletes and are idempotent.
 - Status changes (`set_entry_status`), refunds and reversals follow the rules

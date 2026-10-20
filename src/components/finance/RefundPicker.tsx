@@ -12,6 +12,7 @@ import { formatDate, localDate } from '@/lib/dates'
 import { classifyError, friendlyError } from '@/lib/errors'
 import { formatMoney } from '@/lib/money'
 import { Amount } from './Amount'
+import { CandidateSearchField, ShowOlderButton, useCandidateBrowse } from './CandidateSearch'
 import { CategoryBadge } from './CategoryTile'
 import { entryTitle } from './TransactionRow'
 
@@ -57,7 +58,13 @@ function RefundPickerBody({ onClose, entry, onDone, onReload }: RefundPickerProp
   const submitting = useRef(false)
   const name = useId()
   const isIncome = entry.kind === 'income'
-  const candidates = useOffsetCandidates({ kinds: ['expense'], minAmountMinor: entry.amount_minor, before: entry.occurred_at })
+  const browse = useCandidateBrowse()
+  const candidates = useOffsetCandidates({
+    kinds: ['expense'],
+    minAmountMinor: entry.amount_minor,
+    before: entry.occurred_at,
+    ...browse.query,
+  })
   const [choice, setChoice] = useState<string | null>(null)
   const [categoryId, setCategoryId] = useState('')
   const [error, setError] = useState<{ message: string; conflict: boolean } | null>(null)
@@ -108,12 +115,15 @@ function RefundPickerBody({ onClose, entry, onDone, onReload }: RefundPickerProp
           Posted purchases of {formatMoney(entry.amount_minor)} or more, on or before{' '}
           {formatDate(localDate(entry.occurred_at, timeZone), { withYear: true })}.
         </p>
+        <CandidateSearchField value={browse.search} onChange={browse.setSearch} />
         {candidates.isPending ? (
           <LoadingBlock rows={2} label="Loading purchases" />
         ) : candidates.error ? (
           <InlineError message={friendlyError(candidates.error)} onRetry={() => void candidates.refetch()} />
         ) : rows.length === 0 ? (
-          <p className="rounded-2xl bg-canvas px-4 py-3 text-sm outline-regular">No purchases like that yet.</p>
+          <p className="rounded-2xl bg-canvas px-4 py-3 text-sm outline-regular">
+            {browse.search.trim() ? 'No purchases match that search.' : 'No purchases like that yet.'}
+          </p>
         ) : (
           <ul className="flex flex-col gap-2">
             {rows.map((row) => {
@@ -145,6 +155,7 @@ function RefundPickerBody({ onClose, entry, onDone, onReload }: RefundPickerProp
             })}
           </ul>
         )}
+        {!candidates.isPending && !candidates.error && browse.hasMore(rows.length) && <ShowOlderButton onClick={browse.more} />}
         {isIncome && (
           <CandidateOption name={name} value={NONE} selected={choice === NONE} onSelect={() => setChoice(NONE)}>
             <span className="flex min-w-0 flex-1 flex-col">

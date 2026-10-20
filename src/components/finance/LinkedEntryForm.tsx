@@ -75,10 +75,16 @@ function LinkedEntryFields({
   existing: loaded,
   onReload,
 }: LinkedEntryFormProps) {
-  const { activeAccounts, accountsById, todayDate, timeZone, profile } = useSettings()
+  const { activeAccounts, accountsById, categories, todayDate, timeZone, profile } = useSettings()
   // The version this edit started from: a change made elsewhere meanwhile is
   // reported as a conflict, never silently overwritten by a background refresh.
   const [existing] = useState(loaded)
+  // A refund recorded without its purchase has its own expense category.
+  const unlinkedRefund = kind === 'refund' && Boolean(existing) && !existing?.related_transaction_id
+  const [categoryId, setCategoryId] = useState(existing?.category_id ?? '')
+  const expenseCategories = categories.filter(
+    (category) => category.transaction_type === 'expense' && (!category.is_archived || category.id === existing?.category_id),
+  )
   const toast = useToast()
   const record = useRecordLinkedEntry()
   const update = useUpdateLinkedEntry()
@@ -159,6 +165,7 @@ function LinkedEntryFields({
             occurredAt,
             note: value.note,
             merchant: existing.merchant,
+            categoryId: unlinkedRefund ? categoryId || null : existing.category_id,
           },
         })
         toast({ message: `${kind === 'refund' ? 'Refund' : 'Reversal'} updated · ${formatMoney(value.amountMinor)}` })
@@ -283,6 +290,23 @@ function LinkedEntryFields({
             <p className="text-sm text-muted">A reversal always stays on the original’s account.</p>
           )}
         </div>
+      )}
+
+      {unlinkedRefund && (
+        <SelectField
+          label="Expense category"
+          value={categoryId}
+          onChange={(event) => setCategoryId(event.target.value)}
+          hint="With no purchase linked, the refund lowers spending in this category."
+        >
+          <option value="">No category</option>
+          {expenseCategories.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
+              {category.is_archived ? ' (archived)' : ''}
+            </option>
+          ))}
+        </SelectField>
       )}
 
       <TextField

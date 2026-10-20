@@ -21,6 +21,13 @@
 -- can be restored from Categories.
 -- =============================================================================
 
+-- Remember whether this is the first time 0003 runs (before it adds columns),
+-- so one-time data changes below are skipped on re-runs.
+select pg_catalog.set_config('friday.m0003_first_run', (not exists (
+  select 1 from information_schema.columns
+  where table_schema = 'public' and table_name = 'transactions' and column_name = 'status'
+))::text, false);
+
 -- -----------------------------------------------------------------------------
 -- Accounts
 -- -----------------------------------------------------------------------------
@@ -1225,6 +1232,11 @@ begin
     where id = p_id
     returning updated_at into v_updated;
   elsif p_kind in ('income', 'expense', 'refund', 'reversal') then
+    -- Lock order: an original before its refunds/reversals, as everywhere else.
+    perform 1 from public.transactions o
+    where o.user_id = v_uid
+      and o.id = (select t.related_transaction_id from public.transactions t where t.id = p_id and t.user_id = v_uid)
+    for no key update;
     select * into v_tx from public.transactions t where t.id = p_id and t.user_id = v_uid for update;
     if not found then
       raise exception 'That entry no longer exists' using errcode = 'P0002';
@@ -1246,8 +1258,10 @@ begin
       type = p_new_kind,
       account_id = p_account_id,
       amount_minor = p_amount_minor,
-      -- Refunds and reversals take their original's category (trigger).
-      category_id = case when v_tx.type in ('refund', 'reversal') then category_id else p_category_id end,
+      -- Linked refunds and reversals take their original's category (trigger);
+      -- a refund recorded without its purchase keeps the one chosen for it.
+      category_id = case when v_tx.type = 'reversal' or v_tx.related_transaction_id is not null
+                         then category_id else p_category_id end,
       occurred_at = coalesce(p_occurred_at, occurred_at),
       note = nullif(btrim(p_note), ''),
       merchant = nullif(btrim(p_merchant), '')
@@ -1281,6 +1295,11 @@ begin
     select deleted_at, updated_at into v_deleted, v_updated
     from public.transfers where id = p_id and user_id = v_uid for update;
   elsif p_kind in ('income', 'expense', 'refund', 'reversal') then
+    -- Lock order: an original before its refunds/reversals, as everywhere else.
+    perform 1 from public.transactions o
+    where o.user_id = v_uid
+      and o.id = (select t.related_transaction_id from public.transactions t where t.id = p_id and t.user_id = v_uid)
+    for no key update;
     select deleted_at, updated_at into v_deleted, v_updated
     from public.transactions where id = p_id and user_id = v_uid for update;
   else
@@ -1335,6 +1354,11 @@ begin
     select status, deleted_at, updated_at into v_current, v_deleted, v_updated
     from public.transfers where id = p_id and user_id = v_uid for update;
   elsif p_kind in ('income', 'expense', 'refund', 'reversal') then
+    -- Lock order: an original before its refunds/reversals, as everywhere else.
+    perform 1 from public.transactions o
+    where o.user_id = v_uid
+      and o.id = (select t.related_transaction_id from public.transactions t where t.id = p_id and t.user_id = v_uid)
+    for no key update;
     select status, deleted_at, updated_at into v_current, v_deleted, v_updated
     from public.transactions where id = p_id and user_id = v_uid for update;
   else
@@ -1404,6 +1428,8 @@ begin
     raise exception 'Not signed in' using errcode = '28000';
   end if;
 
+  -- Lock order: the purchase before the entry that becomes its refund.
+  perform 1 from public.transactions o where o.id = p_original_id and o.user_id = v_uid for no key update;
   select * into v_tx from public.transactions t where t.id = p_id and t.user_id = v_uid for update;
   if not found then
     raise exception 'That entry no longer exists' using errcode = 'P0002';
@@ -1602,7 +1628,10 @@ begin
         v_match_id := v_tx.id;
         if v_tx.deleted_at is not null or v_tx.status = 'voided' then
           v_reason := 'linked_entry_removed';
-        elsif v_kind is not null and v_kind <> v_tx.type then
+        elsif v_kind is null then
+          -- Without its direction, evidence can't safely change an entry.
+          v_reason := 'missing_details';
+        elsif v_kind <> v_tx.type then
           -- Same id, opposite direction: a credit-back or refund of it.
           v_reason := 'needs_link';
         elsif coalesce(v_currency, v_tx.currency) <> v_tx.currency then
@@ -1636,7 +1665,13 @@ begin
         v_match_id := v_tr.id;
         if v_tr.deleted_at is not null or v_tr.status = 'voided' then
           v_reason := 'linked_entry_removed';
-        elsif v_kind is not null and v_kind <> 'transfer' then
+        elsif v_kind is null then
+          v_reason := 'missing_details';
+        elsif v_kind <> 'transfer' then
+          v_reason := 'needs_link';
+        elsif (v_account.id is not null and v_account.id <> v_tr.source_account_id)
+           or (v_destination is not null and v_destination <> v_tr.destination_account_id) then
+          -- Same reference, other direction or accounts: money coming back, not a settlement.
           v_reason := 'needs_link';
         elsif coalesce(v_currency, v_tr.currency) <> v_tr.currency then
           v_reason := 'unsupported_currency';
@@ -1921,6 +1956,27 @@ begin
     raise exception 'Confirmed entries are posted or pending' using errcode = '22023';
   end if;
 
+  -- Other evidence for the same transaction already led to an entry: confirming
+  -- this as a new purchase or income would count it twice. Money coming back
+  -- for it (a refund or reversal of an entry) is a different entry and allowed.
+  if v_event.external_transaction_id is not null
+     and not (p_kind in ('refund', 'reversal') and p_related_transaction_id is not null)
+     and exists (
+    select 1 from public.source_events e
+    left join public.transactions t on t.id = e.resulting_transaction_id
+    left join public.transfers x on x.id = e.resulting_transfer_id
+    where e.user_id = v_uid and e.id <> v_event.id
+      and e.source_type = v_event.source_type
+      and e.source_connection_id is not distinct from v_event.source_connection_id
+      and e.external_transaction_id = v_event.external_transaction_id
+      and e.link_type is not null
+      and coalesce(t.deleted_at, x.deleted_at) is null
+      and coalesce(t.status, x.status) <> 'voided'
+  ) then
+    raise exception 'This is the same transaction as an entry you already have. Use “Same as an existing entry” instead.'
+      using errcode = '22023';
+  end if;
+
   select * into v_saved from public.record_entry(
     p_idempotency_key => v_event.id,
     p_kind => p_kind,
@@ -2012,13 +2068,22 @@ begin
     raise exception 'That entry was voided. Restore it first, or confirm this as a new entry.' using errcode = '22023';
   end if;
 
-  -- Settlement evidence for something still pending moves it to posted.
+  -- Settlement evidence for something still pending moves it to posted, at
+  -- the settled amount when the evidence has one in the entry's currency.
   if v_event.parsed_entry_status = 'posted' and v_status = 'pending' then
     perform public.set_change_reason('Posted, per ' || replace(v_event.source_type, '_', ' '));
     if p_entry_kind = 'transfer' then
-      update public.transfers set status = 'posted' where id = p_entry_id;
+      update public.transfers set
+        status = 'posted',
+        amount_minor = case when v_event.parsed_currency is not distinct from currency or v_event.parsed_currency is null
+                            then coalesce(v_event.parsed_amount_minor, amount_minor) else amount_minor end
+      where id = p_entry_id;
     else
-      update public.transactions set status = 'posted' where id = p_entry_id;
+      update public.transactions set
+        status = 'posted',
+        amount_minor = case when v_event.parsed_currency is not distinct from currency or v_event.parsed_currency is null
+                            then coalesce(v_event.parsed_amount_minor, amount_minor) else amount_minor end
+      where id = p_entry_id;
     end if;
   end if;
 
@@ -2106,12 +2171,15 @@ $$;
 
 -- Visible and reversible (Categories → Show archived → Restore). Only the
 -- untouched seeded default; a renamed or custom category is left alone.
-update public.categories
+update public.categories c
 set is_archived = true
-where is_default
-  and transaction_type = 'income'
-  and name = 'Refunds'
-  and not is_archived;
+where current_setting('friday.m0003_first_run', true) = 'true'
+  and c.is_default
+  and c.transaction_type = 'income'
+  and c.name = 'Refunds'
+  and not c.is_archived
+  -- A recurring item still using it would stop being confirmable.
+  and not exists (select 1 from public.recurring_rules r where r.category_id = c.id);
 
 create or replace function public.delete_all_my_data()
 returns void

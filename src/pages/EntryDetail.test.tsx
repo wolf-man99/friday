@@ -138,6 +138,7 @@ const feedRow = (patch: Partial<LedgerEntryRow> = {}): LedgerEntryRow => ({
 })
 
 let entryData: unknown
+let entryError: unknown = null
 const refetch = vi.fn()
 let linked: Record<string, LedgerEntryRow[]> = {}
 let ledger: Record<string, LedgerEntryRow | null> = {}
@@ -155,7 +156,7 @@ const loaded = <T,>(data: T) => ({ isPending: false, isSuccess: true, data, erro
 
 vi.mock('@/app/settings', () => ({ useSettings: () => settings }))
 vi.mock('@/data/hooks', () => ({
-  useEntry: () => ({ isPending: false, data: entryData, error: null, refetch }),
+  useEntry: () => ({ isPending: false, data: entryData, error: entryError, refetch }),
   useLinkedEntries: (id: string | null) => (id ? loaded(linked[id] ?? []) : disabled),
   useLedgerEntry: (id: string | null) => (id ? loaded(ledger[id] ?? null) : disabled),
   useEntryAudit: () => loaded(audit),
@@ -196,6 +197,7 @@ const button = (name: string | RegExp) => screen.queryByRole('button', { name })
 
 beforeEach(() => {
   entryData = tx()
+  entryError = null
   linked = {}
   ledger = {}
   audit = []
@@ -611,5 +613,27 @@ describe('Entry details — missing entries', () => {
   it('says so for an unknown kind in the address', () => {
     renderDetail('/entry/bogus/e1')
     expect(screen.getByText('Entry not found')).toBeInTheDocument()
+  })
+
+  it('says so when the entry doesn’t exist', () => {
+    entryData = undefined
+    entryError = { code: 'PGRST116', message: 'no rows' }
+    renderDetail()
+    expect(screen.getByText('Entry not found')).toBeInTheDocument()
+  })
+
+  it('keeps showing the entry when a background refresh fails', () => {
+    entryError = new TypeError('Failed to fetch')
+    renderDetail()
+    expect(screen.getByRole('heading', { level: 1, name: 'Expense' })).toBeInTheDocument()
+    expect(button('Edit')).not.toBeNull()
+  })
+
+  it('offers a retry when the first load fails', async () => {
+    entryData = undefined
+    entryError = new TypeError('Failed to fetch')
+    renderDetail()
+    await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+    expect(refetch).toHaveBeenCalled()
   })
 })

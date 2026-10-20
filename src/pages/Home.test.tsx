@@ -120,7 +120,7 @@ describe('Home', () => {
     const card = screen.getByRole('region', { name: 'Needs a look' })
     expect(within(card).getByRole('link', { name: /3 to review/ })).toHaveAttribute('href', '/review')
     const pending = within(card).getByRole('link', { name: /4 pending/ })
-    expect(pending.getAttribute('href')).toContain('status=attention')
+    expect(pending.getAttribute('href')).toContain('status=pending')
   })
 
   it('shows spending net of refunds and says so', () => {

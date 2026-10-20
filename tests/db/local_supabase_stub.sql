@@ -76,8 +76,14 @@ $$;
 grant select, references, trigger on auth.users to friday_owner;
 grant execute on function auth.uid() to anon, authenticated, service_role, friday_owner;
 
--- The migration owner owns the public schema, as postgres does in Supabase.
+-- The migration owner owns the public schema, as postgres does in Supabase,
+-- and can create schemas of its own (Supabase's postgres role can).
 alter schema public owner to friday_owner;
+do $$
+begin
+  execute format('grant create on database %I to friday_owner', current_database());
+end
+$$;
 
 -- Supabase's default privileges: API roles get table access, RLS decides rows.
 grant usage on schema public to anon, authenticated, service_role;

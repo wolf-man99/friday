@@ -13,6 +13,7 @@ import { InlineError, LoadingBlock } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
 import { occurredAtFor } from '@/data/api'
 import type { EntryKind, LedgerEntryRow, SourceEventRow } from '@/data/database.types'
+import { CandidateSearchField, ShowOlderButton, useCandidateBrowse } from '@/components/finance/CandidateSearch'
 import { useConfirmSourceEvent, useLedgerEntry, useOffsetCandidates } from '@/data/hooks'
 import { localDate } from '@/lib/dates'
 import { MERCHANT_MAX, NOTE_MAX } from '@/lib/entry'
@@ -109,9 +110,9 @@ function ConfirmEventForm({ event, onClose }: ConfirmEventSheetProps) {
   // Refunds and reversals: the original they belong to.
   const amountMinor = typedAmount(draft.amountText)
   const offsetsOriginal = kind === 'refund' || kind === 'reversal'
-  const originals = useOffsetCandidates(
-    offsetsOriginal ? originalQuery(kind, draft.accountId, amountMinor, { onlyThisAccount }) : null,
-  )
+  const browse = useCandidateBrowse()
+  const baseOriginalQuery = offsetsOriginal ? originalQuery(kind, draft.accountId, amountMinor, { onlyThisAccount }) : null
+  const originals = useOffsetCandidates(baseOriginalQuery ? { ...baseOriginalQuery, ...browse.query } : null)
   const suggestedOriginalId =
     (event.parsed_kind === 'refund' || event.parsed_kind === 'reversal') && event.suggested_match_kind === 'transaction'
       ? event.suggested_match_id
@@ -172,12 +173,20 @@ function ConfirmEventForm({ event, onClose }: ConfirmEventSheetProps) {
   }
 
   const accountHint = event.parsed_account_hint ? `The ${source} said “${event.parsed_account_hint}”.` : undefined
+  const noMoneyMoved =
+    event.parsed_entry_status === 'cancelled' || event.parsed_entry_status === 'declined' ? event.parsed_entry_status : null
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
       <p className="text-sm text-muted">
         Check the details. Friday records one entry when you confirm — nothing before that.
       </p>
+      {noMoneyMoved && (
+        <p role="note" className="rounded-2xl bg-peach px-3.5 py-3 text-sm font-semibold outline-regular">
+          The {source} says this payment was {noMoneyMoved}, so no money moved. Usually there’s nothing to record: close this
+          and choose Ignore — or “Same as an existing entry” if it cancels a pending one.
+        </p>
+      )}
 
       <fieldset className="flex flex-col gap-2">
         <legend className="label-mono mb-2">Type</legend>
@@ -274,6 +283,13 @@ function ConfirmEventForm({ event, onClose }: ConfirmEventSheetProps) {
               </ToggleChip>
             </div>
           )}
+          {baseOriginalQuery && (
+            <CandidateSearchField
+              label={kind === 'refund' ? 'Search purchases' : 'Search entries'}
+              value={browse.search}
+              onChange={browse.setSearch}
+            />
+          )}
           <OriginalList
             name={originalName}
             kind={kind}
@@ -287,6 +303,9 @@ function ConfirmEventForm({ event, onClose }: ConfirmEventSheetProps) {
             selectedId={draft.originalId}
             onSelect={(id) => change({ originalId: id })}
           />
+          {!originals.isPending && !originals.error && browse.hasMore(originals.data?.length ?? 0) && (
+            <ShowOlderButton onClick={browse.more} />
+          )}
           {kind === 'refund' && (
             <ChoiceOption
               name={originalName}

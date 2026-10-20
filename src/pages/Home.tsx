@@ -289,7 +289,7 @@ function AttentionCard() {
           )}
           {pending > 0 && (
             <AttentionRow
-              to={activityHref({ period: 'all', status: 'attention' })}
+              to={activityHref({ period: 'all', status: 'pending' })}
               icon={<Clock className="size-5" strokeWidth={2.5} />}
               title={`${pending} pending`}
               detail="Counted already, not settled yet"

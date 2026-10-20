@@ -205,6 +205,14 @@ npx supabase secrets set --env-file supabase/functions/.env --project-ref sjxomd
 SUPABASE_PROJECT_REF=sjxomdhbvwvmvdlqwbic scripts/deploy-gmail-functions.sh
 ```
 
+**Without the CLI (dashboard editor):** `DENO_BIN=deno scripts/bundle-gmail-functions.sh`
+writes `dist-functions/gmail-connection.ts` and `dist-functions/gmail-oauth-callback.ts`
+— the same code with the shared modules inlined. In the dashboard: *Edge
+Functions → Deploy a new function → Via Editor*, name it exactly
+`gmail-connection`, replace the editor's code with the first file, deploy;
+repeat for `gmail-oauth-callback`. Then open each function's settings and turn
+**Verify JWT** off. Regenerate and redeploy whenever the function code changes.
+
 Both functions are deployed with `--no-verify-jwt` on purpose:
 `gmail-connection` verifies the caller's Supabase session itself
 (`auth.getUser`), and Google's redirect to `gmail-oauth-callback` carries no

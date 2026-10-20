@@ -11,7 +11,7 @@ import { SelectChip, ToggleChip } from '@/components/ui/Chip'
 import { TextField } from '@/components/ui/Field'
 import { Dialog } from '@/components/ui/Dialog'
 import { EmptyState, InlineError, LoadingBlock } from '@/components/ui/States'
-import type { EntryKind, LedgerEntryRow } from '@/data/database.types'
+import type { CategoryRow, LedgerEntryRow, TransactionType } from '@/data/database.types'
 import { useFeed } from '@/data/hooks'
 import {
   addDays,
@@ -24,14 +24,48 @@ import {
   type DateRange,
 } from '@/lib/dates'
 import { friendlyError } from '@/lib/errors'
-import { activitySearch, readActivityParams, shiftMonth, type ActivityFilters, type PeriodMode } from './activityParams'
+import { incomeEffect, isCounted, spendingEffect } from '@/lib/ledger'
+import {
+  activitySearch,
+  readActivityParams,
+  shiftMonth,
+  type ActivityFilters,
+  type ActivityKind,
+  type PeriodMode,
+} from './activityParams'
 
-const KIND_CHIPS: { value: EntryKind | null; label: string }[] = [
+const KIND_CHIPS: { value: ActivityKind | null; label: string }[] = [
   { value: null, label: 'All' },
   { value: 'expense', label: 'Money out' },
   { value: 'income', label: 'Money in' },
+  // The feed widens this to reversals too: both give money back against an original.
+  { value: 'refund', label: 'Refunds' },
   { value: 'transfer', label: 'Transfers' },
 ]
+
+const STATUS_OPTIONS = [
+  { value: '', label: 'Any status' },
+  { value: 'attention', label: 'Needs attention (pending + review)', display: 'Needs attention' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'needs_review', label: 'Needs review' },
+  { value: 'voided', label: 'Voided' },
+]
+
+/** Which categories a type filter can use; refunds net against expense categories. */
+function categorySide(kind: ActivityKind | null): TransactionType | null {
+  if (kind === 'expense' || kind === 'refund') return 'expense'
+  if (kind === 'income') return 'income'
+  return null
+}
+
+/** Keeps the category filter only when it still makes sense for the new type. */
+function categoryFor(kind: ActivityKind | null, category: string | null, categoriesById: Map<string, CategoryRow>) {
+  if (!category || kind === 'transfer') return null
+  const side = categorySide(kind)
+  if (category === 'none' || !side) return category
+  const row = categoriesById.get(category)
+  return row && row.transaction_type !== side ? null : category
+}
 
 export function Activity() {
   const { todayDate, timeZone, accounts, accountsById, categories, categoriesById } = useSettings()
@@ -66,6 +100,7 @@ export function Activity() {
     {
       range: utcRange,
       kind: filters.kind,
+      status: filters.status,
       accountId: filters.account,
       categoryId: filters.category && filters.category !== 'none' ? filters.category : null,
       uncategorised: filters.category === 'none',
@@ -76,7 +111,7 @@ export function Activity() {
 
   const entries = useMemo(() => feed.data?.pages.flat() ?? [], [feed.data])
   const groups = useMemo(() => groupByDay(entries, timeZone), [entries, timeZone])
-  const filtersActive = Boolean(filters.kind || filters.account || filters.category || filters.q)
+  const filtersActive = Boolean(filters.kind || filters.status || filters.account || filters.category || filters.q)
 
   const periodOptions = [
     { value: 'month', label: 'Month' },
@@ -105,11 +140,12 @@ export function Activity() {
     }
   }
 
+  const side = categorySide(filters.kind)
   const categoryOptions = [
     { value: '', label: 'Any category' },
     { value: 'none', label: 'Uncategorised' },
     ...categories
-      .filter((c) => !filters.kind || filters.kind === c.transaction_type)
+      .filter((c) => !side || side === c.transaction_type)
       .map((c) => ({ value: c.id, label: `${c.name}${c.is_archived ? ' (archived)' : ''}` })),
   ]
 
@@ -120,12 +156,12 @@ export function Activity() {
       <div className="flex min-h-12 items-center gap-2 rounded-pill bg-paper px-4 outline-strong focus-within:shadow-brutal">
         <Search aria-hidden="true" className="size-5 shrink-0" strokeWidth={2.5} />
         <label htmlFor="activity-search" className="sr-only">
-          Search notes and categories
+          Search merchants, notes and categories
         </label>
         <input
           id="activity-search"
           type="search"
-          placeholder="Search notes or categories"
+          placeholder="Search merchants, notes or categories"
           value={searchText}
           onChange={(event) => setSearchText(event.target.value)}
           className="min-h-11 w-full bg-transparent focus:outline-none"
@@ -138,7 +174,7 @@ export function Activity() {
               setSearchText('')
               apply({ q: '' })
             }}
-            className="grid size-9 place-items-center rounded-full"
+            className="-mr-2 grid size-11 shrink-0 place-items-center rounded-full"
           >
             <X aria-hidden="true" className="size-4" strokeWidth={3} />
           </button>
@@ -150,7 +186,7 @@ export function Activity() {
           <ToggleChip
             key={chip.label}
             selected={filters.kind === chip.value}
-            onClick={() => apply({ kind: chip.value, category: chip.value === 'transfer' ? null : filters.category })}
+            onClick={() => apply({ kind: chip.value, category: categoryFor(chip.value, filters.category, categoriesById) })}
           >
             {chip.label}
           </ToggleChip>
@@ -162,7 +198,11 @@ export function Activity() {
         <SelectChip
           label="Account"
           value={filters.account ?? ''}
-          options={[{ value: '', label: 'Any account' }, ...accounts.map((a) => ({ value: a.id, label: a.name }))]}
+          options={[
+            { value: '', label: 'Any account' },
+            // Archived accounts stay filterable: their history is still here.
+            ...accounts.map((a) => ({ value: a.id, label: `${a.name}${a.status === 'archived' ? ' (archived)' : ''}` })),
+          ]}
           onChange={(value) => apply({ account: value || null })}
           active={Boolean(filters.account)}
         />
@@ -175,6 +215,13 @@ export function Activity() {
             active={Boolean(filters.category)}
           />
         )}
+        <SelectChip
+          label="Status"
+          value={filters.status ?? ''}
+          options={STATUS_OPTIONS}
+          onChange={(value) => apply({ status: (value || null) as ActivityFilters['status'] })}
+          active={Boolean(filters.status)}
+        />
       </div>
 
       {filters.range && (filters.period === 'month' || filters.period === 'week') && (
@@ -206,7 +253,7 @@ export function Activity() {
                 <Button
                   onClick={() => {
                     setSearchText('')
-                    apply({ kind: null, account: null, category: null, q: '' })
+                    apply({ kind: null, status: null, account: null, category: null, q: '' })
                   }}
                 >
                   Clear filters
@@ -260,9 +307,11 @@ export function Activity() {
               Load more
             </Button>
           )}
-          {feed.hasNextPage && (
-            <p className="text-center text-sm text-muted">Day totals cover the entries loaded so far.</p>
-          )}
+          <p className="text-center text-sm text-muted">
+            {feed.hasNextPage && 'Day totals cover the entries loaded so far. '}
+            Pending entries count in day totals; voided ones and ones waiting for review don’t. Refunds lower
+            Out, and transfers aren’t counted.
+          </p>
         </div>
       )}
 
@@ -282,7 +331,9 @@ export function Activity() {
 interface DayGroup {
   date: string
   entries: LedgerEntryRow[]
+  /** Net spending: expenses − refunds − reversed purchases. */
   expenseMinor: number
+  /** Net income: income − reversed income. */
   incomeMinor: number
 }
 
@@ -296,8 +347,11 @@ function groupByDay(entries: LedgerEntryRow[], timeZone: string): DayGroup[] {
       groups.push(group)
     }
     group.entries.push(entry)
-    if (entry.kind === 'expense') group.expenseMinor += entry.amount_minor
-    if (entry.kind === 'income') group.incomeMinor += entry.amount_minor
+    // Only posted and pending entries count; transfers move money without
+    // being spending or income (both effects are 0 for them).
+    if (!isCounted(entry.status)) continue
+    group.expenseMinor += spendingEffect(entry)
+    group.incomeMinor += incomeEffect(entry)
   }
   return groups
 }

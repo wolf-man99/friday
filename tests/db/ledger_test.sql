@@ -93,7 +93,7 @@ select tests.eq((select display_name from public.profiles where id = tests.id('A
 select tests.eq((select display_name from public.profiles where id = tests.id('B')), 'bilal', 'profile falls back to email name');
 select tests.eq((select timezone from public.profiles where id = tests.id('A')), 'Asia/Kolkata', 'default timezone');
 select tests.eq((select count(*) from public.categories where user_id = tests.id('A') and transaction_type = 'expense'), 14::bigint, 'expense defaults seeded');
-select tests.eq((select count(*) from public.categories where user_id = tests.id('A') and transaction_type = 'income'), 6::bigint, 'income defaults seeded');
+select tests.eq((select count(*) from public.categories where user_id = tests.id('A') and transaction_type = 'income'), 5::bigint, 'income defaults seeded (no "Refunds" income category: refunds reduce spending)');
 
 -- -----------------------------------------------------------------------------
 -- User A builds a small ledger
@@ -334,13 +334,13 @@ select tests.throws($$select public.seed_default_categories(tests.id('A'))$$,
 insert into public.accounts (name, type, opening_balance_minor) values ('B bank', 'bank', 1000);
 select public.delete_all_my_data();
 select tests.eq((select count(*) from public.accounts), 0::bigint, 'B wipe removed B''s accounts');
-select tests.eq((select count(*) from public.categories), 20::bigint, 'B wipe re-seeded default categories');
+select tests.eq((select count(*) from public.categories), 19::bigint, 'B wipe re-seeded default categories');
 
 reset role;
 
 select tests.eq((select amount_minor from public.transactions where id = tests.id('Shoes')), 300000::bigint, 'A''s transaction untouched by B');
 select tests.eq((select opening_balance_minor from public.accounts where id = tests.id('Wallet')), 200000::bigint, 'A''s account untouched by B');
-select tests.eq((select count(*) from public.categories where user_id = tests.id('A')), 20::bigint, 'A''s categories untouched by B');
+select tests.eq((select count(*) from public.categories where user_id = tests.id('A')), 19::bigint, 'A''s categories untouched by B');
 select tests.eq((select count(*) from public.accounts where user_id = tests.id('A')), 4::bigint, 'A''s accounts survive B''s wipe');
 
 -- -----------------------------------------------------------------------------

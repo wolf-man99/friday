@@ -1,11 +1,11 @@
 // Client-side validation for the quick-add / edit form. The database enforces
 // the same rules; this gives instant, specific feedback before a round trip.
 
-import type { EntryKind } from '@/data/database.types'
+import type { CaptureKind } from '@/data/database.types'
 import { AMOUNT_PROBLEM_MESSAGE, amountProblem, parseAmountToMinor } from './money'
 
 export interface EntryDraft {
-  kind: EntryKind
+  kind: CaptureKind
   amountText: string
   accountId: string | null
   /** Transfers only. */
@@ -22,7 +22,7 @@ export interface EntryDraft {
 export type EntryErrors = Partial<Record<'amount' | 'account' | 'destination' | 'note' | 'merchant', string>>
 
 export interface ValidEntry {
-  kind: EntryKind
+  kind: CaptureKind
   amountMinor: number
   accountId: string
   destinationAccountId: string | null

@@ -1,4 +1,4 @@
-import { ChartPie, House, ListOrdered, Plus, User } from 'lucide-react'
+import { ChartPie, House, ListOrdered, Plus, WalletCards } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router'
 import { cn } from '@/components/ui/cn'
@@ -59,7 +59,7 @@ export function BottomNav() {
           </button>
         </div>
         <Item to="/insights" label="Insights" icon={<ChartPie className="size-5" strokeWidth={2.25} />} />
-        <Item to="/profile" label="Profile" icon={<User className="size-5" strokeWidth={2.25} />} />
+        <Item to="/accounts" label="Accounts" icon={<WalletCards className="size-5" strokeWidth={2.25} />} />
       </div>
     </nav>
   )

@@ -13,6 +13,7 @@ import type {
   AccountInsert,
   CategoryInsert,
   EntryKind,
+  EntryStatus,
   ProfileRow,
   RecurringRuleInsert,
   TransactionType,
@@ -30,6 +31,16 @@ export const keys = {
   breakdown: (range: UtcRange, type: TransactionType) => ['ledger', 'breakdown', range, type] as const,
   trend: (range: UtcRange, bucket: string) => ['ledger', 'trend', range, bucket] as const,
   entry: (kind: EntryKind, id: string) => ['ledger', 'entry', kind, id] as const,
+  linked: (id: string) => ['ledger', 'linked', id] as const,
+  feedEntry: (id: string) => ['ledger', 'feed-entry', id] as const,
+  audit: (kind: EntryKind, id: string) => ['ledger', 'audit', kind, id] as const,
+  sources: (kind: EntryKind, id: string) => ['ledger', 'sources', kind, id] as const,
+  activity: (range: UtcRange) => ['ledger', 'account-activity', range] as const,
+  attention: ['ledger', 'attention'] as const,
+  // Review items live under ['ledger'] too: confirming one changes balances.
+  reviewEvents: ['ledger', 'review', 'events'] as const,
+  reviewEntries: ['ledger', 'review', 'entries'] as const,
+  candidates: (input: unknown) => ['ledger', 'candidates', input] as const,
   recurring: ['recurring'] as const,
   rules: ['recurring', 'rules'] as const,
   due: ['recurring', 'due'] as const,
@@ -84,6 +95,85 @@ export function useEntry(kind: EntryKind | undefined, id: string | undefined) {
     queryKey: keys.entry(kind ?? 'expense', id ?? ''),
     queryFn: () => api.fetchEntry(kind!, id!),
     enabled: Boolean(kind && id),
+  })
+}
+
+/** Refunds and reversals recorded against an entry. */
+export function useLinkedEntries(originalId: string | null | undefined) {
+  return useQuery({
+    queryKey: keys.linked(originalId ?? ''),
+    queryFn: () => api.fetchLinkedEntries(originalId!),
+    enabled: Boolean(originalId),
+  })
+}
+
+/** One feed row by id (e.g. the purchase a refund belongs to). */
+export function useLedgerEntry(id: string | null | undefined) {
+  return useQuery({ queryKey: keys.feedEntry(id ?? ''), queryFn: () => api.fetchLedgerEntry(id!), enabled: Boolean(id) })
+}
+
+export function useEntryAudit(kind: EntryKind | undefined, id: string | undefined) {
+  return useQuery({
+    queryKey: keys.audit(kind ?? 'expense', id ?? ''),
+    queryFn: () => api.fetchEntryAudit(kind!, id!),
+    enabled: Boolean(kind && id),
+  })
+}
+
+export function useEntrySources(kind: EntryKind | undefined, id: string | undefined) {
+  return useQuery({
+    queryKey: keys.sources(kind ?? 'expense', id ?? ''),
+    queryFn: () => api.fetchEntrySources(kind!, id!),
+    enabled: Boolean(kind && id),
+  })
+}
+
+export function useAccountActivity(range: UtcRange) {
+  return useQuery({
+    queryKey: keys.activity(range),
+    queryFn: () => api.fetchAccountActivity(range),
+    placeholderData: keepPreviousData,
+  })
+}
+
+/** Review queue and pending counts for badges. */
+export function useAttention() {
+  return useQuery({ queryKey: keys.attention, queryFn: api.fetchAttention })
+}
+
+export function useReviewEvents() {
+  return useQuery({ queryKey: keys.reviewEvents, queryFn: api.fetchReviewEvents })
+}
+
+export function useReviewEntries() {
+  return useQuery({ queryKey: keys.reviewEntries, queryFn: api.fetchReviewEntries })
+}
+
+export function useIncomeInCategories(categoryIds: string[]) {
+  return useQuery({
+    queryKey: ['ledger', 'income-in-categories', categoryIds] as const,
+    queryFn: () => api.fetchIncomeInCategories(categoryIds),
+    enabled: categoryIds.length > 0,
+  })
+}
+
+export function useStalePending(days = 5) {
+  return useQuery({ queryKey: ['ledger', 'stale-pending', days] as const, queryFn: () => api.fetchStalePending(days) })
+}
+
+export function useMatchCandidates(input: Parameters<typeof api.fetchMatchCandidates>[0] | null) {
+  return useQuery({
+    queryKey: keys.candidates({ match: input }),
+    queryFn: () => api.fetchMatchCandidates(input!),
+    enabled: Boolean(input),
+  })
+}
+
+export function useOffsetCandidates(input: Parameters<typeof api.fetchOffsetCandidates>[0] | null) {
+  return useQuery({
+    queryKey: keys.candidates({ offset: input }),
+    queryFn: () => api.fetchOffsetCandidates(input!),
+    enabled: Boolean(input),
   })
 }
 
@@ -163,8 +253,85 @@ export function useCreateEntry() {
 export function useUpdateEntry() {
   const invalidate = useInvalidate()
   return useMutation({
-    mutationFn: (args: { previousKind: EntryKind; id: string; expectedUpdatedAt: string | null; entry: ValidEntry; occurredAt: string }) =>
-      api.updateEntry(args.previousKind, args.id, args.expectedUpdatedAt, args.entry, args.occurredAt),
+    mutationFn: (args: {
+      previousKind: EntryKind
+      id: string
+      expectedUpdatedAt: string | null
+      entry: ValidEntry
+      occurredAt: string
+      reason?: string | null
+    }) => api.updateEntry(args.previousKind, args.id, args.expectedUpdatedAt, args.entry, args.occurredAt, args.reason),
+    onSettled: () => invalidate(keys.ledger),
+  })
+}
+
+/** Record a refund or reversal against its original (idempotent per key). */
+export function useRecordLinkedEntry() {
+  const invalidate = useInvalidate()
+  return useMutation({
+    mutationFn: ({ input, idempotencyKey }: { input: api.LinkedEntryInput; idempotencyKey: string }) =>
+      api.recordLinkedEntry(input, idempotencyKey),
+    onSettled: () => invalidate(keys.ledger),
+  })
+}
+
+export function useUpdateLinkedEntry() {
+  const invalidate = useInvalidate()
+  return useMutation({
+    mutationFn: (args: {
+      kind: 'refund' | 'reversal'
+      id: string
+      expectedUpdatedAt: string | null
+      values: Parameters<typeof api.updateLinkedEntry>[3]
+      reason?: string | null
+    }) => api.updateLinkedEntry(args.kind, args.id, args.expectedUpdatedAt, args.values, args.reason),
+    onSettled: () => invalidate(keys.ledger),
+  })
+}
+
+export function useSetEntryStatus() {
+  const invalidate = useInvalidate()
+  return useMutation({
+    mutationFn: (args: {
+      kind: EntryKind
+      id: string
+      status: EntryStatus
+      reason?: string | null
+      expectedUpdatedAt?: string | null
+    }) => api.setEntryStatus(args.kind, args.id, args.status, { reason: args.reason, expectedUpdatedAt: args.expectedUpdatedAt }),
+    onSettled: () => invalidate(keys.ledger),
+  })
+}
+
+export function useMakeRefund() {
+  const invalidate = useInvalidate()
+  return useMutation({
+    mutationFn: (args: { id: string } & Parameters<typeof api.makeRefund>[1]) => api.makeRefund(args.id, args),
+    onSettled: () => invalidate(keys.ledger),
+  })
+}
+
+export function useConfirmSourceEvent() {
+  const invalidate = useInvalidate()
+  return useMutation({
+    mutationFn: ({ eventId, input }: { eventId: string; input: api.ConfirmEventInput }) => api.confirmSourceEvent(eventId, input),
+    onSettled: () => invalidate(keys.ledger),
+  })
+}
+
+export function useLinkSourceEvent() {
+  const invalidate = useInvalidate()
+  return useMutation({
+    mutationFn: ({ eventId, entryKind, entryId }: { eventId: string; entryKind: EntryKind; entryId: string }) =>
+      api.linkSourceEvent(eventId, entryKind, entryId),
+    onSettled: () => invalidate(keys.ledger),
+  })
+}
+
+export function useIgnoreSourceEvent() {
+  const invalidate = useInvalidate()
+  return useMutation({
+    mutationFn: (eventId: string) => api.ignoreSourceEvent(eventId),
     onSettled: () => invalidate(keys.ledger),
   })
 }

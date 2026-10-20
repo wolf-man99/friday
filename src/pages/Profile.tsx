@@ -1,4 +1,4 @@
-import { ChevronRight, Download, FileJson, Landmark, LogOut, Repeat, ShieldAlert, Tags } from 'lucide-react'
+import { ChevronRight, Download, FileJson, Inbox, Landmark, LogOut, Repeat, ShieldAlert, Tags } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { signOut, useAuth } from '@/app/auth'
@@ -11,11 +11,12 @@ import { SelectField, TextField } from '@/components/ui/Field'
 import { InlineError } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
 import { fetchAllEntries, fetchBackup } from '@/data/api'
-import { useDeleteAllData, useDueOccurrences, useUpdateProfile } from '@/data/hooks'
+import { useAttention, useDeleteAllData, useDueOccurrences, useUpdateProfile } from '@/data/hooks'
+import { attentionCounts } from '@/features/insights/figures'
+import { accountsCsv, transactionsCsv } from '@/features/insights/exports'
 import { downloadFile, toCsv } from '@/lib/csv'
-import { browserTimeZone, canonicalTimeZone, localDate, localTime } from '@/lib/dates'
+import { browserTimeZone, canonicalTimeZone, localDate } from '@/lib/dates'
 import { friendlyError } from '@/lib/errors'
-import { minorToDecimalString } from '@/lib/money'
 
 export const TIME_ZONES: string[] = (() => {
   try {
@@ -27,9 +28,10 @@ export const TIME_ZONES: string[] = (() => {
 })()
 
 export function Profile() {
-  const { profile, accounts, categories } = useSettings()
+  const { profile, accounts, accountsById, categories, categoriesById } = useSettings()
   const { session } = useAuth()
   const due = useDueOccurrences()
+  const attention = useAttention()
   const updateProfile = useUpdateProfile()
   const toast = useToast()
   const [name, setName] = useState(profile.display_name ?? '')
@@ -52,29 +54,8 @@ export function Profile() {
     setExporting('csv')
     try {
       const entries = await fetchAllEntries()
-      const accountName = (id: string | null) => (id ? (accounts.find((a) => a.id === id)?.name ?? '') : '')
-      const categoryName = (id: string | null) => (id ? (categories.find((c) => c.id === id)?.name ?? '') : '')
-      const rows = entries.map((e) => [
-        localDate(e.occurred_at, profile.timezone),
-        localTime(e.occurred_at, profile.timezone),
-        e.kind,
-        minorToDecimalString(e.amount_minor, { alwaysFraction: true }),
-        e.currency,
-        e.kind === 'transfer' ? '' : accountName(e.account_id),
-        e.kind === 'transfer' ? '' : categoryName(e.category_id),
-        e.kind === 'transfer' ? accountName(e.account_id) : '',
-        e.kind === 'transfer' ? accountName(e.counter_account_id) : '',
-        e.merchant ?? '',
-        e.note ?? '',
-        e.id,
-      ])
-      downloadFile(
-        `friday-transactions-${localDate(new Date(), profile.timezone)}.csv`,
-        toCsv(
-          ['date', 'time', 'type', 'amount', 'currency', 'account', 'category', 'transfer_from', 'transfer_to', 'merchant', 'note', 'id'],
-          rows,
-        ),
-      )
+      const { headers, rows } = transactionsCsv(entries, { accountsById, categoriesById, timeZone: profile.timezone })
+      downloadFile(`friday-transactions-${localDate(new Date(), profile.timezone)}.csv`, toCsv(headers, rows))
       toast({ message: `Exported ${rows.length} entries` })
     } catch (error) {
       toast({ message: friendlyError(error), tone: 'error' })
@@ -85,27 +66,8 @@ export function Profile() {
 
   function exportAccounts() {
     setExporting('accounts')
-    const rows = accounts.map((a) => [
-      a.name,
-      a.type,
-      a.status,
-      a.currency,
-      minorToDecimalString(a.opening_balance_minor, { alwaysFraction: true }),
-      a.opening_date,
-      minorToDecimalString(a.income_minor, { alwaysFraction: true }),
-      minorToDecimalString(a.expense_minor, { alwaysFraction: true }),
-      minorToDecimalString(a.transfers_in_minor, { alwaysFraction: true }),
-      minorToDecimalString(a.transfers_out_minor, { alwaysFraction: true }),
-      minorToDecimalString(a.balance_minor, { alwaysFraction: true }),
-      a.id,
-    ])
-    downloadFile(
-      `friday-accounts-${localDate(new Date(), profile.timezone)}.csv`,
-      toCsv(
-        ['name', 'type', 'status', 'currency', 'opening_balance', 'opening_date', 'income', 'expenses', 'transfers_in', 'transfers_out', 'balance', 'id'],
-        rows,
-      ),
-    )
+    const { headers, rows } = accountsCsv(accounts)
+    downloadFile(`friday-accounts-${localDate(new Date(), profile.timezone)}.csv`, toCsv(headers, rows))
     setExporting(null)
     toast({ message: `Exported ${rows.length} accounts` })
   }
@@ -128,10 +90,11 @@ export function Profile() {
   }
 
   const dueCount = due.data?.length ?? 0
+  const { toReview } = attentionCounts(attention.data)
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Profile" scribble="your stuff" />
+      <PageHeader title="Profile" scribble="your stuff" back="/" />
 
       <Card tone="peach" shadow="md" className="flex flex-col gap-4">
         <div>
@@ -181,6 +144,13 @@ export function Profile() {
             <NavRow to="/accounts" icon={<Landmark className="size-5" strokeWidth={2.25} />} label="Accounts" detail={`${accounts.filter((a) => a.status === 'active').length} active`} />
             <NavRow to="/categories" icon={<Tags className="size-5" strokeWidth={2.25} />} label="Categories" detail={`${categories.filter((c) => !c.is_archived).length} active`} />
             <NavRow to="/recurring" icon={<Repeat className="size-5" strokeWidth={2.25} />} label="Recurring" detail={dueCount > 0 ? `${dueCount} due` : 'Bills & salary'} highlight={dueCount > 0} />
+            <NavRow
+              to="/review"
+              icon={<Inbox className="size-5" strokeWidth={2.25} />}
+              label="Review"
+              detail={toReview > 0 ? `${toReview} to review` : attention.data ? 'All clear' : 'Imports & checks'}
+              highlight={toReview > 0}
+            />
           </ul>
         </nav>
       </Card>

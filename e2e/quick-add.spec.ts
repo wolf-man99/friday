@@ -163,12 +163,13 @@ test('an edit made elsewhere is never silently overwritten', async ({ browser })
   for (const page of [a, b]) {
     await page.goto('/activity?period=all&q=Shared%20edit')
     await page.getByRole('link', { name: /Shared edit/ }).click()
+    await page.getByRole('button', { name: 'Edit' }).click()
     await expect(page.getByLabel(/amount in rupees/)).toHaveValue('666')
   }
 
   await b.getByLabel(/amount in rupees/).fill('700')
   await b.getByRole('button', { name: 'Save changes' }).click()
-  await expect(b).toHaveURL(/\/activity/)
+  await expect(b).toHaveURL(/\/entry\/expense\/[^/]+$/)
 
   await a.getByLabel(/amount in rupees/).fill('999')
   await a.getByRole('button', { name: 'Save changes' }).click()

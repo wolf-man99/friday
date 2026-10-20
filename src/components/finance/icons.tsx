@@ -124,16 +124,18 @@ export function CategoryGlyph({ icon, className }: { icon: string | null | undef
 
 export const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   bank: 'Bank account',
-  cash: 'Cash',
   credit_card: 'Credit card',
+  wallet: 'Wallet',
+  cash: 'Cash',
   other: 'Other',
 }
 
 const ACCOUNT_ICONS: Record<AccountType, LucideIcon> = {
   bank: Landmark,
-  cash: Banknote,
   credit_card: CreditCard,
-  other: Wallet,
+  wallet: Wallet,
+  cash: Banknote,
+  other: PiggyBank,
 }
 
 export function AccountGlyph({ type, className }: { type: AccountType; className?: string }) {

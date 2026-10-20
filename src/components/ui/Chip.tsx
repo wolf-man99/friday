@@ -29,6 +29,8 @@ export function ToggleChip({ selected, icon, className, children, ...rest }: Tog
 export interface ChipOption {
   value: string
   label: string
+  /** Shorter text for the chip itself when this option is chosen. */
+  display?: string
 }
 
 interface SelectChipProps {
@@ -44,7 +46,8 @@ interface SelectChipProps {
 
 /** A pill that wraps a native <select> — great pickers on phones, fully accessible. */
 export function SelectChip({ label, value, options, onChange, active, className }: SelectChipProps) {
-  const current = options.find((option) => option.value === value)?.label ?? label
+  const chosen = options.find((option) => option.value === value)
+  const current = chosen ? (chosen.display ?? chosen.label) : label
   return (
     <label
       className={cn(

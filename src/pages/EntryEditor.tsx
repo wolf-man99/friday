@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useSettings } from '@/app/settings'
 import { AccountGlyph, CategoryGlyph } from '@/components/finance/icons'
 import { AmountInput } from '@/components/finance/AmountInput'
@@ -29,8 +29,15 @@ import { IconButton } from '@/components/ui/IconButton'
 import { PillSwitch, type PillOption } from '@/components/ui/PillSwitch'
 import { EmptyState, InlineError, LoadingBlock } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
-import { occurredAtFor } from '@/data/api'
-import type { AccountBalanceRow, EntryKind, TransactionType } from '@/data/database.types'
+import { occurredAtFor, type LedgerEntry } from '@/data/api'
+import type {
+  AccountBalanceRow,
+  CaptureKind,
+  EntryKind,
+  TransactionRow,
+  TransactionType,
+  TransferRow,
+} from '@/data/database.types'
 import { useCaptureHistory, useCreateEntry, useEntry, useSetEntryDeleted, useUpdateEntry } from '@/data/hooks'
 import { pickAccount, type AccountSource } from '@/features/capture/defaults'
 import { clearDraft, isDirty, loadDraft, newIdempotencyKey, saveDraft, switchKind, type CaptureDraft } from '@/features/capture/draft'
@@ -43,50 +50,75 @@ import { AMOUNT_PROBLEM_MESSAGE, amountProblem, formatAmountInput, formatMoney, 
 import { goBack } from '@/lib/navigation'
 import { lastAccountKey, lastDestinationKey, readPref, writePref } from '@/lib/prefs'
 
-const KIND_OPTIONS: PillOption<EntryKind>[] = [
+const KIND_OPTIONS: PillOption<CaptureKind>[] = [
   { value: 'expense', label: 'Expense', icon: <ArrowUpRight className="size-4" strokeWidth={2.75} /> },
   { value: 'income', label: 'Income', icon: <ArrowDownLeft className="size-4" strokeWidth={2.75} /> },
   { value: 'transfer', label: 'Transfer', icon: <ArrowLeftRight className="size-4" strokeWidth={2.75} /> },
 ]
 
-const HEADLINE: Record<EntryKind, string> = {
+const HEADLINE: Record<CaptureKind, string> = {
   expense: 'Money out.',
   income: 'Money in.',
   transfer: 'Moving money.',
 }
 
-const SAVE_LABEL: Record<EntryKind, string> = {
+const SAVE_LABEL: Record<CaptureKind, string> = {
   expense: 'Save expense',
   income: 'Save income',
   transfer: 'Record transfer',
 }
 
-const NOUN: Record<EntryKind, string> = { expense: 'expense', income: 'income', transfer: 'transfer' }
+const NOUN: Record<CaptureKind, string> = { expense: 'expense', income: 'income', transfer: 'transfer' }
 
 const VISIBLE_CATEGORIES = 8
 
-function isKind(value: string | null | undefined): value is EntryKind {
+function isKind(value: string | null | undefined): value is CaptureKind {
   return value === 'expense' || value === 'income' || value === 'transfer'
 }
 
-/** Quick Add (create) and entry details (edit) share one amount-first screen. */
+/**
+ * Quick Add (/add) and editing an income, expense or transfer
+ * (/entry/:kind/:id/edit) share one amount-first screen. Editing starts from
+ * the entry's details page and returns there.
+ */
 export function EntryEditor() {
   const params = useParams<{ kind: string; id: string }>()
-  const editing = Boolean(params.id && isKind(params.kind))
-  const entryQuery = useEntry(editing ? (params.kind as EntryKind) : undefined, params.id)
+  const editing = Boolean(params.id)
+  const kind = isKind(params.kind) ? params.kind : undefined
+  const entryQuery = useEntry(editing ? kind : undefined, params.id)
   // Bumped only when the user asks for the latest version after a conflict;
   // background refetches never reset a form someone is editing.
   const [reloads, setReloads] = useState(0)
 
   if (editing) {
-    if (entryQuery.isPending) return <EditorFrame title="Loading…"><LoadingBlock rows={4} /></EditorFrame>
-    if (entryQuery.error || !entryQuery.data || entryQuery.data.deleted_at) {
+    const details = `/entry/${params.kind}/${params.id}`
+    // Refunds and reversals have their own form on the details page.
+    if (params.kind === 'refund' || params.kind === 'reversal') return <Navigate to={details} replace />
+    if (!kind) {
       return (
         <EditorFrame title="Not found">
+          <InlineError message="This entry doesn’t exist." />
+        </EditorFrame>
+      )
+    }
+    if (entryQuery.isPending) return <EditorFrame title="Loading…" fallback={details}><LoadingBlock rows={4} /></EditorFrame>
+    if (entryQuery.error || !entryQuery.data || entryQuery.data.deleted_at) {
+      return (
+        <EditorFrame title="Not found" fallback={details}>
           <InlineError
             message={entryQuery.error ? friendlyError(entryQuery.error) : 'This entry was deleted or doesn’t exist.'}
             onRetry={entryQuery.error ? () => void entryQuery.refetch() : undefined}
           />
+        </EditorFrame>
+      )
+    }
+    if (!isEditable(entryQuery.data)) {
+      return <Navigate to={`/entry/${entryQuery.data.kind}/${entryQuery.data.id}`} replace />
+    }
+    if (entryQuery.data.status === 'voided') {
+      return (
+        <EditorFrame title="Voided" fallback={details}>
+          <InlineError message="Voided entries can’t be edited. Restore it from its details first." />
         </EditorFrame>
       )
     }
@@ -104,12 +136,12 @@ export function EntryEditor() {
   return <EntryForm key="new" />
 }
 
-function EditorFrame({ title, children }: { title: string; children: React.ReactNode }) {
+function EditorFrame({ title, fallback = '/activity', children }: { title: string; fallback?: string; children: React.ReactNode }) {
   const navigate = useNavigate()
   return (
     <div className="flex flex-col gap-4 py-2">
       <div className="flex items-center gap-3">
-        <IconButton label="Close" icon={<X className="size-5" strokeWidth={2.75} />} onClick={() => goBack(navigate, '/activity')} />
+        <IconButton label="Close" icon={<X className="size-5" strokeWidth={2.75} />} onClick={() => goBack(navigate, fallback)} />
         <h1 className="display text-3xl">{title}</h1>
       </div>
       {children}
@@ -117,7 +149,12 @@ function EditorFrame({ title, children }: { title: string; children: React.React
   )
 }
 
-type Existing = NonNullable<ReturnType<typeof useEntry>['data']>
+type Existing = ({ kind: TransactionType } & TransactionRow) | ({ kind: 'transfer' } & TransferRow)
+
+/** Refunds and reversals have their own form on the entry's details page. */
+function isEditable(entry: LedgerEntry): entry is Existing {
+  return isKind(entry.kind)
+}
 
 type SaveState =
   | { status: 'idle' }
@@ -138,6 +175,8 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
   const returnTo = (location.state as { from?: string } | null)?.from ?? '/'
   const userId = profile.id
   const mode = existing ? 'edit' : 'create'
+  // Edits return to the entry's details page (or wherever the user came from).
+  const detailsPath = existing ? `/entry/${existing.kind}/${existing.id}` : null
 
   const createEntry = useCreateEntry()
   const updateEntry = useUpdateEntry()
@@ -150,7 +189,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
 
   // --- Draft ------------------------------------------------------------------
 
-  function freshDraft(kind: EntryKind, keep?: Partial<CaptureDraft>): { draft: CaptureDraft; source: AccountSource | null } {
+  function freshDraft(kind: CaptureKind, keep?: Partial<CaptureDraft>): { draft: CaptureDraft; source: AccountSource | null } {
     const source = pickAccount(activeAccounts, {
       contextId: search.get('account'),
       defaultId: profile.default_account_id,
@@ -199,7 +238,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
     }
     const restored = loadDraft(userId)
     if (restored) return { draft: restored, restored, source: null }
-    const kind = isKind(search.get('kind')) ? (search.get('kind') as EntryKind) : 'expense'
+    const kind = isKind(search.get('kind')) ? (search.get('kind') as CaptureKind) : 'expense'
     const { draft, source } = freshDraft(kind)
     return { draft, restored: null, source }
   })
@@ -317,7 +356,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
     if (Object.keys(errors).length) setErrors({})
   }
 
-  function changeKind(kind: EntryKind) {
+  function changeKind(kind: CaptureKind) {
     track('transaction_type_selected', { type: kind, previous: draft.kind })
     const destination =
       kind === 'transfer'
@@ -460,7 +499,8 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
         })
         track('transaction_save_succeeded', { type: entry.kind, attempt: attempts.current, elapsed_ms: elapsed(), replayed: false, mode })
         toast({ message: `Updated ${NOUN[entry.kind]} · ${formatMoney(entry.amountMinor)}` })
-        goBack(navigate, '/activity')
+        // Its kind may have changed (expense ↔ income); the details page reads it fresh.
+        goBack(navigate, `/entry/${entry.kind}/${existing.id}`)
         return
       }
 
@@ -510,7 +550,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
     }
   }
 
-  function announceSaved(kind: EntryKind, amountMinor: number, categoryId: string | null, id: string, savedKind: EntryKind) {
+  function announceSaved(kind: CaptureKind, amountMinor: number, categoryId: string | null, id: string, savedKind: EntryKind) {
     const savedAt = Date.now()
     const category = categoryId ? categories.find((c) => c.id === categoryId)?.name : null
     const message =
@@ -520,7 +560,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
     toast({
       message,
       actions: [
-        { label: 'Edit', onClick: () => navigate(`/entry/${savedKind}/${id}`, { state: { from: returnTo } }) },
+        { label: 'Edit', onClick: () => navigate(`/entry/${savedKind}/${id}/edit`, { state: { from: returnTo } }) },
         {
           label: 'Undo',
           onClick: async () => {
@@ -556,7 +596,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
           },
         },
       })
-      goBack(navigate, '/activity')
+      goBack(navigate, detailsPath ?? '/activity')
     } catch (error) {
       setConfirmDelete(false)
       setSaveState({ status: 'error', message: friendlyError(error), errorClass: classifyError(error) })
@@ -570,7 +610,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
   function leave() {
     if (existing) {
       if (changedSinceOpen) setConfirmDiscard(true)
-      else goBack(navigate, '/activity')
+      else goBack(navigate, detailsPath ?? '/activity')
       return
     }
     if (isDirty(draft)) {
@@ -584,7 +624,7 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
   function discard() {
     setConfirmDiscard(false)
     if (existing) {
-      goBack(navigate, '/activity')
+      goBack(navigate, detailsPath ?? '/activity')
       return
     }
     clearDraft(userId)
@@ -631,6 +671,8 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
     .join(' · ')
 
   const suggestedCategory = draft.categorySource === 'suggested' ? categories.find((c) => c.id === draft.categoryId) : null
+  const destinationAccount = draft.destinationAccountId ? accountsById.get(draft.destinationAccountId) : undefined
+  const cardPayment = draft.kind === 'transfer' && destinationAccount?.type === 'credit_card'
   const showShortcuts = !existing && shortcuts.length > 0 && draft.amountText === '' && !recovered
 
   return (
@@ -766,10 +808,17 @@ function EntryForm({ existing: loaded, onReloadExisting }: { existing?: Existing
               onSelect={(id) => update({ destinationAccountId: id })}
               error={errors.destination ?? unavailable(draft.destinationAccountId)}
             />
-            <p className="rounded-2xl bg-purple/40 px-4 py-3 text-sm outline-regular">
-              <strong>Not spending, not income.</strong> A transfer just moves money between your accounts — it changes
-              both balances and stays out of your totals.
-            </p>
+            {cardPayment ? (
+              <p className="rounded-2xl bg-purple/40 px-4 py-3 text-sm outline-regular">
+                <strong>Card payment — not spending.</strong> It reduces what you owe on {destinationAccount?.name}. The
+                purchases on the card were already counted as spending, so this doesn’t count them twice.
+              </p>
+            ) : (
+              <p className="rounded-2xl bg-purple/40 px-4 py-3 text-sm outline-regular">
+                <strong>Not spending, not income.</strong> A transfer just moves money between your accounts — it changes
+                both balances and stays out of your totals.
+              </p>
+            )}
           </section>
         ) : (
           <>

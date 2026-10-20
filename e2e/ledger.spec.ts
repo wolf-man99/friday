@@ -51,7 +51,9 @@ test('a fresh user can track, correct and export their money', async ({ page }) 
 
   // A cash account
   await page.goto('/accounts/new')
-  await page.getByRole('radio', { name: 'Cash' }).click()
+  // The type radios are visually replaced by their labels; tap the label like a person would.
+  await page.locator('label').filter({ has: page.getByRole('radio', { name: 'Cash' }) }).click()
+  await expect(page.getByRole('radio', { name: 'Cash' })).toBeChecked()
   await page.getByLabel('Name').fill('Wallet')
   await page.getByLabel('Starting balance').fill('1000')
   await page.getByRole('button', { name: 'Add account' }).click()
@@ -77,26 +79,34 @@ test('a fresh user can track, correct and export their money', async ({ page }) 
   await expect(page.getByRole('link', { name: /Savings, Bank account\. Balance ₹1,25,000/ })).toBeVisible()
   await expect(page.getByRole('link', { name: /Wallet, Cash\. Balance ₹4,749\.50/ })).toBeVisible()
 
-  // Edit: change the dinner amount
+  // Edit: open the dinner's details, then change its amount
   await page.goto('/activity')
   await page.getByRole('link', { name: /Dinner/ }).click()
+  await expect(page).toHaveURL(/\/entry\/expense\/[^/]+$/)
+  await page.getByRole('button', { name: 'Edit' }).click()
   await page.getByLabel(/amount in rupees/).fill('1500')
   await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page).toHaveURL(/\/entry\/expense\/[^/]+$/)
+  await page.goto('/activity')
   await expect(page.getByRole('link', { name: /Dinner, spent ₹1,500/ })).toBeVisible()
 
-  // Delete the transfer, then undo
-  await page.getByRole('link', { name: /Transfer, moved ₹5,000/ }).click()
-  await page.getByRole('button', { name: 'Delete this transfer' }).click()
-  await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
-  await expect(page.getByRole('link', { name: /Transfer, moved/ })).toHaveCount(0)
-  await page.getByRole('button', { name: 'Undo' }).click()
-  await expect(page.getByRole('link', { name: /Transfer, moved ₹5,000/ })).toBeVisible()
-
-  // Delete for real; balances follow.
-  await page.getByRole('link', { name: /Transfer, moved ₹5,000/ }).click()
-  await page.getByRole('button', { name: 'Delete this transfer' }).click()
+  // Delete the transfer from its details page, then undo
+  await page.getByRole('link', { name: /moved ₹5,000/ }).click()
+  await page.getByRole('button', { name: 'Delete' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
   await expect(page.getByText('Deleted transfer · ₹5,000')).toBeVisible()
+  await page.getByRole('button', { name: 'Undo' }).click()
+  await expect(page.getByText('Restored.')).toBeVisible()
+  await page.goto('/activity')
+  await expect(page.getByRole('link', { name: /moved ₹5,000/ })).toBeVisible()
+
+  // Delete for real; balances follow.
+  await page.getByRole('link', { name: /moved ₹5,000/ }).click()
+  await page.getByRole('button', { name: 'Delete' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
+  await expect(page.getByText('Deleted transfer · ₹5,000')).toBeVisible()
+  await page.goto('/activity')
+  await expect(page.getByRole('link', { name: /moved ₹5,000/ })).toHaveCount(0)
   await page.goto('/accounts')
   await expect(page.getByRole('link', { name: /Savings, Bank account\. Balance ₹1,30,000/ })).toBeVisible()
   await expect(page.getByRole('link', { name: /Wallet, Cash\. Balance −₹500|Wallet, Cash\. Overdrawn/ })).toBeVisible()
@@ -109,7 +119,8 @@ test('a fresh user can track, correct and export their money', async ({ page }) 
   ])
   const csv = await (await download.createReadStream()).toArray()
   const text = Buffer.concat(csv).toString('utf8')
-  expect(text).toContain('date,time,type,amount,currency,account,category,transfer_from,transfer_to,merchant,note,id')
+  // Columns only ever get appended, so older spreadsheets keep working.
+  expect(text).toContain('date,time,type,amount,currency,account,category,transfer_from,transfer_to,merchant,note,id,status,source,refund_of')
   expect(text).toContain('income,80000.00,INR,Savings,Salary')
   expect(text).toContain('expense,1500.00,INR,Wallet,Food & dining,,,,Dinner')
   expect(text).not.toContain('transfer,5000.00')

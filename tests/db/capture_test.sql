@@ -71,10 +71,10 @@ select tests.eq((select row(created, matches)::text from public.record_entry(
 -- record_entry: income and transfers
 -- -----------------------------------------------------------------------------
 
-insert into tests.ids select 'quick:refund', id from public.record_entry(
+insert into tests.ids select 'quick:cashback', id from public.record_entry(
   '22222222-2222-4222-8222-222222222222', 'income', 5000, tests.id('Amex'),
-  p_category_id => tests.id('cat:Refunds'));
-select tests.eq(tests.balance('Amex'), tests.num('card0') + 5000, 'a refund to a card reduces what is owed');
+  p_category_id => tests.id('cat:Other income'));
+select tests.eq(tests.balance('Amex'), tests.num('card0') + 5000, 'income credited to a card reduces what is owed');
 select tests.eq((select income from tests.month_totals()), tests.num('income0') + 5000, 'income raises income total');
 
 insert into tests.ids select 'quick:atm', id from public.record_entry(
@@ -180,7 +180,7 @@ select tests.eq(tests.balance('Wallet'), tests.num('wallet0') - 40000, 'undoing 
 -- -----------------------------------------------------------------------------
 
 select tests.eq((select string_agg(action, ',' order by id) from public.ledger_audit where entity_id = tests.id('quick:coffee')),
-  'create,update,update,update,void,restore', 'every change to an entry is audited in order');
+  'create,update,update,update,delete,restore', 'every change to an entry is audited in order');
 select tests.eq((select changed_fields from public.ledger_audit where entity_id = tests.id('quick:coffee') and action = 'update' order by id limit 1),
   array['amount_minor', 'note'], 'audit lists exactly the fields that changed');
 select tests.eq((select bool_or(snapshot ? 'note' or snapshot ? 'merchant' or snapshot::text like '%Tokai%' or snapshot::text like '%Team coffee%')

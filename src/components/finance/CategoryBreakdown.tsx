@@ -22,8 +22,11 @@ export interface BreakdownSlice {
   name: string
   icon: string
   color: string
+  /** Net: gross minus refunds or reversals in the period. Charts draw only slices above zero. */
   totalMinor: number
   count: number
+  /** Refunds (or, for income, reversals) already taken off totalMinor. */
+  refundMinor: number
 }
 
 export function toSlices(rows: CategoryBreakdownRow[], categories: Map<string, CategoryRow>): BreakdownSlice[] {
@@ -36,6 +39,7 @@ export function toSlices(rows: CategoryBreakdownRow[], categories: Map<string, C
       color: category?.color ?? 'peach',
       totalMinor: row.total_minor,
       count: row.transaction_count,
+      refundMinor: row.refund_minor ?? 0,
     }
   })
 }
@@ -54,8 +58,13 @@ interface DonutProps {
   centerLabel: string
 }
 
-/** Thick-outlined donut. Decorative to screen readers — the legend carries the data. */
-export function Donut({ slices, total, centerLabel }: DonutProps) {
+/**
+ * Thick-outlined donut. Decorative to screen readers — the legend carries the
+ * data. Only slices above zero are drawn: a category where refunds outweighed
+ * spending has no meaningful share, so screens say that in words instead.
+ */
+export function Donut({ slices: all, total, centerLabel }: DonutProps) {
+  const slices = all.filter((slice) => slice.totalMinor > 0)
   const size = 220
   const c = size / 2
   const r = c - 6
@@ -63,7 +72,7 @@ export function Donut({ slices, total, centerLabel }: DonutProps) {
   return (
     <div className="relative mx-auto aspect-square w-full max-w-[15rem]">
       <svg viewBox={`0 0 ${size} ${size}`} className="size-full" aria-hidden="true">
-        {slices.length === 1 ? (
+        {slices.length === 0 || total <= 0 ? null : slices.length === 1 ? (
           <circle cx={c} cy={c} r={r} fill={TONE_HEX[toneOf(slices[0].color)]} stroke="var(--color-ink)" strokeWidth={4} />
         ) : (
           slices.map((slice) => {
@@ -98,21 +107,26 @@ interface LegendProps {
   /** Builds the drill-down link for a slice. */
   hrefFor: (slice: BreakdownSlice) => string
   limit?: number
+  /** What refundMinor is called: "refunds" for spending, "reversals" for income. */
+  offsetWord?: string
 }
 
 /** The textual equivalent of the donut, and the drill-down into transactions. */
-export function BreakdownLegend({ slices, total, hrefFor, limit }: LegendProps) {
+export function BreakdownLegend({ slices, total, hrefFor, limit, offsetWord = 'refunds' }: LegendProps) {
   const shown = limit ? slices.slice(0, limit) : slices
   return (
     <ul className="flex flex-col gap-1">
       {shown.map((slice) => {
         const pct = percentOf(slice.totalMinor, total)
+        const offset = slice.refundMinor > 0 ? `after ${formatMoney(slice.refundMinor)} in ${offsetWord}` : null
         return (
           <li key={slice.categoryId ?? 'none'}>
             <Link
               to={hrefFor(slice)}
-              className="flex min-h-14 items-center gap-3 rounded-2xl px-2 py-2 hover:bg-peach/50"
-              aria-label={`${slice.name}: ${formatMoney(slice.totalMinor)}, ${pct}% of total, ${slice.count} ${slice.count === 1 ? 'entry' : 'entries'}. Show transactions`}
+              className="flex min-h-14 items-center gap-3 rounded-2xl px-2 py-2 hover:bg-peach/50 focus-visible:bg-peach/50"
+              aria-label={`${slice.name}: ${formatMoney(slice.totalMinor)}${offset ? ` ${offset}` : ''}, ${pct}% of total, ${slice.count} ${
+                slice.count === 1 ? 'entry' : 'entries'
+              }. Show transactions`}
             >
               <CategoryBadge icon={slice.icon} color={slice.color} size="sm" />
               <span aria-hidden="true" className="flex min-w-0 flex-1 flex-col gap-1">
@@ -129,6 +143,7 @@ export function BreakdownLegend({ slices, total, hrefFor, limit }: LegendProps) 
                   </span>
                   <span className="label-mono w-10 text-right">{pct}%</span>
                 </span>
+                {offset && <span className="label-mono text-muted">{offset}</span>}
               </span>
               <ChevronRight aria-hidden="true" className="size-4 shrink-0" strokeWidth={2.5} />
             </Link>

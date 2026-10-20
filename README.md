@@ -9,11 +9,26 @@ went — in a loud, tactile, Riff-inspired interface.
   marked as suggestions), drafts that survive reloads, retries that can never
   record an entry twice, and Edit / Undo after every save. Details in
   [`docs/quick-add.md`](docs/quick-add.md).
-- **Accounts & balances** — cash, bank, credit cards and other accounts with
-  opening balances. Balances are derived from the ledger, never stored.
-- **Transfers** move money between accounts without touching income or spending.
-- **Activity** — day-grouped feed with search and period / type / account /
-  category filters.
+- **Accounts & balances** — bank accounts, credit cards, wallets and cash,
+  grouped by type, with the bank or provider and (for cards) a credit limit.
+  Balances are derived from the ledger, never stored; card dues are kept apart
+  from available money, with available credit shown as an estimate.
+- **Transfers** move money between accounts without touching income or
+  spending — paying a card bill is a transfer, so a purchase is never counted
+  twice.
+- **Refunds and reversals** are recorded against the original purchase (or
+  income): they reduce spending instead of counting as income, can be partial,
+  and can never exceed the original.
+- **Statuses** — posted, pending, needs review and voided, so a cancelled
+  authorisation is never mistaken for a refund. Every change is in an audit
+  trail with its reason.
+- **Activity** — day-grouped feed with search and period / type / status /
+  account / category filters, and a details page for every entry (source,
+  related refunds, history, void / reverse / refund actions).
+- **Review queue** — the landing place for future imports (email, bank,
+  wallet): evidence waits there instead of touching balances until it is
+  confirmed, linked to an existing entry or ignored. No importer is connected
+  yet; see [`docs/ledger-model.md`](docs/ledger-model.md).
 - **Insights** — spending by category, monthly trend, comparisons with the
   previous period, plain-language observations; everything drills down.
 - **Recurring** — rent, salary, subscriptions. Friday prompts when they're due;
@@ -23,7 +38,8 @@ went — in a loud, tactile, Riff-inspired interface.
 - **PWA** — install to the home screen; the app shell works offline (saving
   needs a connection; v1 doesn't queue offline writes).
 
-The rules behind every number are in [`docs/financial-rules.md`](docs/financial-rules.md).
+The rules behind every number are in [`docs/financial-rules.md`](docs/financial-rules.md)
+and the full ledger model in [`docs/ledger-model.md`](docs/ledger-model.md).
 
 ## Stack
 
@@ -44,6 +60,7 @@ order**:
 | ---- | ------------ |
 | `20261018000000_friday_init.sql` | the whole v1 schema. Run once, on an empty project. |
 | `20261019000000_capture_service.sql` | Quick Add save service: merchant field, idempotent `record_entry`, `update_entry` with conflict detection, `set_entry_voided`, default account, audit trail. Additive — existing data is kept — and safe to re-run. |
+| `20261020000000_ledger_model.sql` | Ledger model: refunds and reversals, statuses, sources, wallet accounts, institution and credit limit, the import boundary (`source_events`) and review-queue functions, net-of-refund reports. Additive and safe to re-run; existing entries become posted, manual entries with unchanged amounts and balances. It also archives the seeded "Refunds" **income** category (refunds now reduce spending); restore it from Categories if you want it back. |
 
 **These are the only files to run in Supabase.** The SQL under `tests/db/` is for
 local testing; it creates fake users and refuses to run in a Supabase project.
@@ -100,7 +117,7 @@ URL to Supabase's *Site URL* / *Redirect URLs*.
 
 ```bash
 npm run typecheck   # TypeScript
-npm test            # unit + component tests (money, dates, recurrence, CSV, quick add)
+npm test            # unit + component tests (money, dates, ledger rules, CSV, every screen)
 npm run build       # production build + service worker
 ```
 
@@ -108,8 +125,10 @@ npm run build       # production build + service worker
 stub of Supabase's `auth` schema and its non-superuser roles) and check ledger
 maths, constraints, RLS isolation between users, sign-up as Supabase's auth role,
 recurring idempotency, the capture service (idempotent saves, edit conflicts,
-undo, audit), upgrading a database that already holds data, and 8 concurrent
-replays of one save. Never point them at Supabase:
+undo, audit), the ledger model (card purchases and repayments, full and partial
+refunds, reversals, statuses, imports and the review queue, cross-user access),
+upgrading a database that already holds data, and concurrent saves, refunds and
+imports. Never point them at Supabase:
 
 ```bash
 PGHOST=localhost PGUSER=postgres PGPASSWORD=postgres npm run test:db
@@ -139,12 +158,13 @@ supabase/migrations/   schema, RLS, views, RPCs — the only SQL to run in Supab
 tests/db/              local-only SQL integration tests + Supabase auth/role stub
 src/lib/               money, dates/timezones, recurrence, CSV, validation, analytics (pure, tested)
 src/features/capture/  Quick Add logic: account defaults, category suggestions, drafts
+src/lib/ledger.ts      accounting rules for display: signs, statuses, card figures, balance summary
 src/data/              typed data-access layer + React Query hooks
 src/components/ui/     design-system primitives (Button, Card, PillSwitch, Dialog, Toast…)
 src/components/finance/ finance components (TransactionRow, AccountCard, charts…)
 src/pages/             screens
 e2e/                   Playwright tests and the local fake Supabase gateway
-docs/                  financial rules, Quick Add behaviour, backup and restore
+docs/                  ledger model, financial rules, Quick Add behaviour, backup and restore
 ```
 
 ## Backups

@@ -19,6 +19,15 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   recurring_rules_category_fk: 'That category doesn’t match this type of entry',
   categories_active_name_unique: 'You already have a category with that name',
   recurring_rules_end_after_start: 'The end date must be after the start date',
+  accounts_credit_limit_valid: 'A credit limit must be more than zero, and only cards have one',
+  accounts_institution_length: 'Keep the bank or provider name under 60 characters',
+  accounts_type_check: 'Pick bank, card, wallet, cash or other',
+  transactions_related_fk: 'That original entry doesn’t exist',
+  transactions_related_shape: 'A reversal must point at the entry it reverses',
+  transactions_not_self_related: 'An entry can’t refund or reverse itself',
+  transactions_status_check: 'That isn’t a status Friday knows',
+  transfers_status_check: 'That isn’t a status Friday knows',
+  source_events_external_unique: 'That item was already received',
 }
 
 export function isOffline() {

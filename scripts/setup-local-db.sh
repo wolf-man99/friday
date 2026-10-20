@@ -14,4 +14,7 @@ for migration in supabase/migrations/*.sql; do
   psql -v ON_ERROR_STOP=1 -q -d "$DB" -c "set role friday_owner" -f "$migration" >/dev/null
 done
 psql -v ON_ERROR_STOP=1 -q -d "$DB" -c "alter role authenticator password 'authenticator'" >/dev/null
+# PostgREST may have loaded its schema cache while the migrations were still
+# running; tell it to reload now that they're all applied.
+psql -v ON_ERROR_STOP=1 -q -d "$DB" -c "notify pgrst, 'reload schema'" >/dev/null
 echo "database $DB ready"

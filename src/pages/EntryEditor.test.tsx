@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '@/components/ui/Toast'
 import type { AccountBalanceRow, CategoryRow } from '@/data/database.types'
@@ -24,6 +24,14 @@ const account = (id: string, name: string, type: AccountBalanceRow['type'], stat
   transfers_in_minor: 0,
   transfers_out_minor: 0,
   balance_minor: 0,
+  institution_name: null,
+  credit_limit_minor: null,
+  refunds_minor: 0,
+  reversed_income_minor: 0,
+  pending_minor: 0,
+  review_count: 0,
+  outstanding_minor: type === 'credit_card' ? 0 : null,
+  available_credit_minor: null,
 })
 
 const category = (id: string, name: string, type: CategoryRow['transaction_type']): CategoryRow => ({
@@ -58,14 +66,20 @@ function makeSettings(overrides: { defaultAccountId?: string | null; accounts?: 
 let settings = makeSettings()
 let history: HistoryItem[] = []
 const createEntry = vi.fn()
+const updateEntry = vi.fn()
 const setDeleted = vi.fn()
+let entryResult: { isPending: boolean; data: unknown; error: unknown; refetch?: () => Promise<unknown> } = {
+  isPending: false,
+  data: undefined,
+  error: null,
+}
 
 vi.mock('@/app/settings', () => ({ useSettings: () => settings }))
 vi.mock('@/data/hooks', () => ({
   useCreateEntry: () => ({ mutateAsync: createEntry, isPending: false }),
-  useUpdateEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useUpdateEntry: () => ({ mutateAsync: updateEntry, isPending: false }),
   useSetEntryDeleted: () => ({ mutateAsync: setDeleted, isPending: false }),
-  useEntry: () => ({ isPending: false, data: undefined, error: null }),
+  useEntry: () => entryResult,
   useCaptureHistory: () => ({ data: history, isPending: false }),
 }))
 
@@ -78,12 +92,59 @@ function renderAdd(path = '/add') {
         <Routes>
           <Route path="/add" element={<EntryEditor />} />
           <Route path="/" element={<p>home screen</p>} />
-          <Route path="/entry/:kind/:id" element={<p>edit screen</p>} />
+          <Route path="/entry/:kind/:id" element={<p>details screen</p>} />
+          <Route path="/entry/:kind/:id/edit" element={<p>edit screen</p>} />
         </Routes>
       </ToastProvider>
     </MemoryRouter>,
   )
 }
+
+function DetailsStub() {
+  const location = useLocation()
+  return <p>details screen {location.pathname}</p>
+}
+
+function renderEdit(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <ToastProvider>
+        <Routes>
+          <Route path="/entry/:kind/:id/edit" element={<EntryEditor />} />
+          <Route path="/entry/:kind/:id" element={<DetailsStub />} />
+          <Route path="/activity" element={<p>activity screen</p>} />
+        </Routes>
+      </ToastProvider>
+    </MemoryRouter>,
+  )
+}
+
+const expenseRow = (patch = {}) => ({
+  kind: 'expense',
+  id: 'e1',
+  user_id: 'u1',
+  account_id: 'bank',
+  type: 'expense',
+  amount_minor: 25000,
+  currency: 'INR',
+  category_id: 'food',
+  occurred_at: '2026-10-17T06:30:00.000Z',
+  note: null,
+  merchant: 'Blue Tokai',
+  idempotency_key: 'k',
+  created_via: 'quick_add',
+  deleted_at: null,
+  status: 'posted',
+  voided_from: null,
+  related_transaction_id: null,
+  reversal_of_type: null,
+  base_type: 'expense',
+  source_type: 'manual',
+  source_confidence: null,
+  created_at: '2026-10-17T06:30:00.000Z',
+  updated_at: '2026-10-17T06:31:00.123456+00:00',
+  ...patch,
+})
 
 const amountField = () => screen.getByLabelText(/amount in rupees/i)
 const storedDraft = () => JSON.parse(localStorage.getItem('friday:quick-add-draft:u1') ?? 'null')?.draft ?? null
@@ -96,6 +157,9 @@ beforeEach(() => {
   history = []
   createEntry.mockReset()
   createEntry.mockResolvedValue(saved())
+  updateEntry.mockReset()
+  updateEntry.mockResolvedValue('v2')
+  entryResult = { isPending: false, data: undefined, error: null }
   setDeleted.mockReset()
   setDeleted.mockResolvedValue(undefined)
   localStorage.clear()
@@ -150,6 +214,25 @@ describe('Quick Add — capture', () => {
     await userEvent.click(within(toast).getByRole('button', { name: 'Undo' }))
     expect(setDeleted).toHaveBeenCalledWith({ kind: 'expense', id: 'new-id', deleted: true })
     expect(events.some((e) => e.name === 'transaction_undo_used')).toBe(true)
+  })
+
+  it('opens the saved entry’s edit screen from the toast', async () => {
+    renderAdd()
+    await userEvent.type(amountField(), '250')
+    await userEvent.click(screen.getByRole('button', { name: 'Save expense' }))
+    const toast = await screen.findByRole('status')
+    await userEvent.click(within(toast).getByRole('button', { name: 'Edit' }))
+    expect(await screen.findByText('edit screen')).toBeInTheDocument()
+  })
+
+  it('calls a transfer to a credit card a card payment, not spending', async () => {
+    renderAdd('/add?kind=transfer')
+    expect(screen.getByText('Not spending, not income.')).toBeInTheDocument()
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'From' })).getByRole('radio', { name: /HDFC/ }))
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'To' })).getByRole('radio', { name: /Amex/ }))
+    expect(screen.getByText('Card payment — not spending.')).toBeInTheDocument()
+    expect(screen.getByText(/reduces what you owe on Amex/)).toBeInTheDocument()
+    expect(screen.queryByText('Not spending, not income.')).not.toBeInTheDocument()
   })
 
   it('keeps the amount and drops the category when switching type', async () => {
@@ -277,6 +360,15 @@ describe('Quick Add — failures and drafts', () => {
     expect(createEntry.mock.calls[1][0].idempotencyKey).not.toBe(createEntry.mock.calls[0][0].idempotencyKey)
   })
 
+  it('opens the entry an earlier attempt saved on its details page', async () => {
+    createEntry.mockResolvedValueOnce(saved({ created: false, matches: false, id: 'earlier' }))
+    renderAdd()
+    await userEvent.type(amountField(), '300')
+    await userEvent.click(screen.getByRole('button', { name: 'Save expense' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Open the saved entry' }))
+    expect(await screen.findByText('details screen')).toBeInTheDocument()
+  })
+
   it('does not send anything while offline, and keeps the draft', async () => {
     Object.defineProperty(navigator, 'onLine', { configurable: true, value: false })
     renderAdd()
@@ -360,5 +452,53 @@ describe('Quick Add — analytics privacy', () => {
     const dump = JSON.stringify(events)
     expect(dump).not.toMatch(/4321|43,21|Secret Shop|very private/)
     expect(events.find((e) => e.name === 'transaction_save_attempted')?.props).toMatchObject({ has_note: true, has_merchant: true })
+  })
+})
+
+describe('Editing an entry', () => {
+  it('saves against the loaded version and returns to the details page', async () => {
+    entryResult = { isPending: false, data: expenseRow(), error: null }
+    renderEdit('/entry/expense/e1/edit')
+    expect(screen.getByRole('heading', { name: 'Edit expense' })).toBeInTheDocument()
+    expect(amountField()).toHaveValue('250')
+    await userEvent.clear(amountField())
+    await userEvent.type(amountField(), '300')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(updateEntry).toHaveBeenCalledTimes(1))
+    expect(updateEntry.mock.calls[0][0]).toMatchObject({
+      previousKind: 'expense',
+      id: 'e1',
+      expectedUpdatedAt: '2026-10-17T06:31:00.123456+00:00',
+      entry: { kind: 'expense', amountMinor: 30000, accountId: 'bank', categoryId: 'food' },
+      // The day didn't change, so the original instant is kept.
+      occurredAt: '2026-10-17T06:30:00.000Z',
+    })
+    expect(await screen.findByText('details screen /entry/expense/e1')).toBeInTheDocument()
+  })
+
+  it('closes back to the details page when nothing changed', async () => {
+    entryResult = { isPending: false, data: expenseRow(), error: null }
+    renderEdit('/entry/expense/e1/edit')
+    await userEvent.click(screen.getByRole('button', { name: 'Close without saving' }))
+    expect(await screen.findByText('details screen /entry/expense/e1')).toBeInTheDocument()
+    expect(updateEntry).not.toHaveBeenCalled()
+  })
+
+  it('sends refunds and reversals to their details page, which has their own form', async () => {
+    renderEdit('/entry/refund/r1/edit')
+    expect(await screen.findByText('details screen /entry/refund/r1')).toBeInTheDocument()
+  })
+
+  it('follows an entry whose kind differs from its address to its details', async () => {
+    entryResult = { isPending: false, data: expenseRow({ kind: 'refund', type: 'refund', id: 'e1' }), error: null }
+    renderEdit('/entry/expense/e1/edit')
+    expect(await screen.findByText('details screen /entry/refund/e1')).toBeInTheDocument()
+  })
+
+  it('won’t edit a voided entry', () => {
+    entryResult = { isPending: false, data: expenseRow({ status: 'voided', voided_from: 'posted' }), error: null }
+    renderEdit('/entry/expense/e1/edit')
+    expect(screen.getByText(/Voided entries can’t be edited/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
   })
 })

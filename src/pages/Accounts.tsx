@@ -1,6 +1,6 @@
-import { Archive, ArchiveRestore, ListOrdered, Plus, Star } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { Archive, ArchiveRestore, Check, ChevronRight, Inbox, ListOrdered, Plus, Star } from 'lucide-react'
+import { useId, useState, type FormEvent } from 'react'
+import { Link, useNavigate, useParams } from 'react-router'
 import { useSettings } from '@/app/settings'
 import { AccountCard, describeBalance } from '@/components/finance/AccountCard'
 import { ACCOUNT_TYPE_LABEL, AccountGlyph } from '@/components/finance/icons'
@@ -10,15 +10,17 @@ import { Card } from '@/components/ui/Card'
 import { cn } from '@/components/ui/cn'
 import { ConfirmDialog } from '@/components/ui/Dialog'
 import { TextField } from '@/components/ui/Field'
-import { PillSwitch } from '@/components/ui/PillSwitch'
 import { EmptyState, InlineError } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
-import { TONE_BG, TONE_LABEL, TONES, type AccentTone } from '@/components/ui/tones'
+import { TONE_BG, TONE_LABEL, TONES, toneOf, type AccentTone } from '@/components/ui/tones'
 import type { AccountBalanceRow, AccountType } from '@/data/database.types'
 import { useSaveAccount, useUpdateProfile } from '@/data/hooks'
+import { breakdownRows, describeCredit } from '@/features/accounts/figures'
+import { accountFormText, accountValues, INSTITUTION_MAX_LENGTH, type AccountFormErrors } from '@/features/accounts/form'
 import { formatDate } from '@/lib/dates'
 import { friendlyError } from '@/lib/errors'
-import { formatAmountInput, formatMoney, minorToDecimalString, parseAmountToMinor, MAX_AMOUNT_MINOR } from '@/lib/money'
+import { balanceSummary, groupAccounts, isLiability } from '@/lib/ledger'
+import { fitAmountClass, formatAmountInput, formatMoney } from '@/lib/money'
 import { goBack } from '@/lib/navigation'
 import { activityHref } from './activityParams'
 
@@ -27,14 +29,11 @@ export function Accounts() {
   const [showArchived, setShowArchived] = useState(false)
   const active = accounts.filter((a) => a.status === 'active')
   const archived = accounts.filter((a) => a.status === 'archived')
-  const assets = active.filter((a) => a.type !== 'credit_card')
-  const cards = active.filter((a) => a.type === 'credit_card')
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Accounts"
-        back="/profile"
         actions={
           <LinkButton to="/accounts/new" size="sm" variant="primary" icon={<Plus aria-hidden="true" className="size-4" strokeWidth={3} />}>
             Add<span className="sr-only"> account</span>
@@ -42,29 +41,47 @@ export function Accounts() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3">
-        <Card tone="peach" shadow="md">
-          <p className="label-mono">Tracked balances</p>
-          <p className="display tabular truncate text-2xl">{formatMoney(assets.reduce((s, a) => s + a.balance_minor, 0))}</p>
-          <p className="text-sm text-muted">Cash, bank & other</p>
-        </Card>
-        <Card tone="paper" shadow="md">
-          <p className="label-mono">Card dues</p>
-          <p className="display tabular truncate text-2xl">
-            {formatMoney(cards.reduce((s, a) => s + Math.max(0, -a.balance_minor), 0))}
-          </p>
-          <p className="text-sm text-muted">Owed on {cards.length} {cards.length === 1 ? 'card' : 'cards'}</p>
-        </Card>
-      </div>
-
       {active.length === 0 ? (
-        <EmptyState icon={<Plus className="size-9" strokeWidth={3} />} title="No active accounts" action={<LinkButton to="/accounts/new" variant="primary">Add an account</LinkButton>} />
+        <Card tone="canvas" className="border-dashed">
+          <EmptyState
+            icon={<Plus className="size-9" strokeWidth={3} />}
+            title="No active accounts"
+            body={
+              archived.length > 0
+                ? 'Your archived accounts are below. Restore one, or add a new account to start tracking again.'
+                : 'Add a bank account, card, wallet or cash to start tracking.'
+            }
+            action={
+              <LinkButton to="/accounts/new" variant="primary">
+                Add an account
+              </LinkButton>
+            }
+          />
+        </Card>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
-          {active.map((account) => (
-            <AccountCard key={account.id} account={account} />
+        <>
+          <MoneySummary accounts={active} />
+          {groupAccounts(active).map((group) => (
+            <section key={group.type} aria-labelledby={`group-${group.type}`} className="flex flex-col gap-3">
+              <h2 id={`group-${group.type}`} className="display text-2xl">
+                {group.title}
+              </h2>
+              {isLiability(group.type) ? (
+                <div className="flex flex-col gap-3">
+                  {group.accounts.map((account) => (
+                    <AccountCard key={account.id} account={account} wide />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {group.accounts.map((account) => (
+                    <AccountCard key={account.id} account={account} />
+                  ))}
+                </div>
+              )}
+            </section>
           ))}
-        </div>
+        </>
       )}
 
       {archived.length > 0 && (
@@ -73,11 +90,14 @@ export function Accounts() {
             {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
           </Button>
           {showArchived && (
-            <div className="grid grid-cols-2 gap-3">
-              {archived.map((account) => (
-                <AccountCard key={account.id} account={account} />
-              ))}
-            </div>
+            <>
+              <p className="text-sm text-muted">Archived accounts keep their history and balance. They aren’t in the totals above.</p>
+              <div className="grid grid-cols-2 gap-3">
+                {archived.map((account) => (
+                  <AccountCard key={account.id} account={account} />
+                ))}
+              </div>
+            </>
           )}
         </section>
       )}
@@ -85,14 +105,94 @@ export function Accounts() {
   )
 }
 
+/** Available money and card dues, side by side but never added together. */
+function MoneySummary({ accounts }: { accounts: AccountBalanceRow[] }) {
+  const summary = balanceSummary(accounts)
+  const hasCards = summary.cardAccounts > 0
+  return (
+    <section aria-label="Summary" className="flex flex-col gap-3">
+      <div className={cn('grid gap-3', hasCards && 'grid-cols-2')}>
+        <Card tone="peach" shadow="md" className="flex flex-col gap-1">
+          <p className="label-mono">Available money</p>
+          <Figure minor={summary.availableMinor} large={!hasCards} />
+          <p className="mt-auto text-sm text-muted">Bank, wallet, cash &amp; other</p>
+        </Card>
+        {hasCards && (
+          <Card tone="paper" shadow="md" className="flex flex-col gap-1">
+            <p className="label-mono">Card dues</p>
+            <Figure minor={summary.cardDuesMinor} />
+            <p className="mt-auto text-sm text-muted">
+              Owed on {summary.cardAccounts} {summary.cardAccounts === 1 ? 'card' : 'cards'}
+            </p>
+          </Card>
+        )}
+      </div>
+      <p className="text-sm text-muted">
+        {hasCards
+          ? 'Available money is the total in your active bank, wallet, cash and other accounts. Card dues are what you owe on cards, kept separate.'
+          : 'Available money is the total in your active bank, wallet, cash and other accounts.'}
+      </p>
+      {summary.reviewCount > 0 && <ReviewNote count={summary.reviewCount} />}
+    </section>
+  )
+}
+
+function Figure({ minor, large }: { minor: number; large?: boolean }) {
+  const text = formatMoney(minor)
+  return (
+    <p className={cn('display tabular', large ? fitAmountClass(text, ['text-4xl', 'text-3xl', 'text-2xl']) : fitAmountClass(text))}>
+      <span aria-hidden="true">{text}</span>
+      <span className="sr-only">{text.replace('−', 'minus ')}</span>
+    </p>
+  )
+}
+
+/** Entries in needs_review don't count anywhere yet; say so and link to the queue. */
+function ReviewNote({ count, onAccount }: { count: number; onAccount?: boolean }) {
+  const entries = count === 1 ? '1 entry' : `${count} entries`
+  const notIncluded = count === 1 ? 'isn’t included' : 'aren’t included'
+  return (
+    <Link
+      to="/review"
+      aria-label={`${entries}${onAccount ? ' on this account' : ''} waiting for review ${notIncluded} in ${
+        onAccount ? 'this balance' : 'these totals'
+      }. Open the review queue`}
+      className="pressable flex min-h-11 items-center gap-3 rounded-[1.25rem] bg-yellow px-4 py-2 outline-regular"
+    >
+      <Inbox aria-hidden="true" className="size-5 shrink-0" strokeWidth={2.5} />
+      <span aria-hidden="true" className="flex-1 text-sm font-semibold">
+        {entries} waiting for review {notIncluded}
+      </span>
+      <ChevronRight aria-hidden="true" className="size-5 shrink-0" strokeWidth={2.5} />
+    </Link>
+  )
+}
+
 const TYPE_OPTIONS: { value: AccountType; label: string }[] = [
   { value: 'bank', label: 'Bank' },
-  { value: 'cash', label: 'Cash' },
   { value: 'credit_card', label: 'Card' },
+  { value: 'wallet', label: 'Wallet' },
+  { value: 'cash', label: 'Cash' },
   { value: 'other', label: 'Other' },
 ]
 
-const DEFAULT_TONE: Record<AccountType, AccentTone> = { bank: 'sky', cash: 'lime', credit_card: 'purple', other: 'yellow' }
+const DEFAULT_TONE: Record<AccountType, AccentTone> = { bank: 'sky', credit_card: 'purple', wallet: 'mint', cash: 'lime', other: 'yellow' }
+
+const NAME_PLACEHOLDER: Record<AccountType, string> = {
+  bank: 'e.g. SBI Savings',
+  credit_card: 'e.g. HDFC Millennia',
+  wallet: 'e.g. Paytm',
+  cash: 'e.g. Pocket cash',
+  other: 'e.g. Savings jar',
+}
+
+const INSTITUTION_PLACEHOLDER: Record<AccountType, string> = {
+  bank: 'e.g. State Bank of India',
+  credit_card: 'e.g. HDFC Bank',
+  wallet: 'e.g. Paytm Payments Bank',
+  cash: 'Optional',
+  other: 'Optional',
+}
 
 interface AccountFormProps {
   account?: AccountBalanceRow
@@ -105,38 +205,48 @@ interface AccountFormProps {
 export function AccountForm({ account, onSaved, submitLabel }: AccountFormProps) {
   const { todayDate } = useSettings()
   const save = useSaveAccount()
+  const formId = useId()
+  const [initial] = useState(() => accountFormText(account))
   const [type, setType] = useState<AccountType>(account?.type ?? 'bank')
   const [name, setName] = useState(account?.name ?? '')
+  const [institution, setInstitution] = useState(initial.institution)
+  const [creditLimitText, setCreditLimitText] = useState(initial.creditLimitText)
   const [color, setColor] = useState<AccentTone>((account?.color as AccentTone) ?? DEFAULT_TONE[account?.type ?? 'bank'])
   const [colorTouched, setColorTouched] = useState(Boolean(account))
-  const isCard = type === 'credit_card'
-  const openingDisplay = account ? (account.type === 'credit_card' ? -account.opening_balance_minor : account.opening_balance_minor) : 0
-  const [openingText, setOpeningText] = useState(
-    account ? formatAmountInput(minorToDecimalString(Math.abs(openingDisplay))) : '',
-  )
-  const [negative, setNegative] = useState(openingDisplay < 0)
+  const isCard = isLiability(type)
+  const [openingText, setOpeningText] = useState(initial.openingText)
+  const [negative, setNegative] = useState(initial.openingNegative)
   const [openingDate, setOpeningDate] = useState(account?.opening_date ?? todayDate)
-  const [errors, setErrors] = useState<{ name?: string; opening?: string }>({})
+  const [errors, setErrors] = useState<AccountFormErrors>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
+
+  function changeType(next: AccountType) {
+    setType(next)
+    if (!colorTouched) setColor(DEFAULT_TONE[next])
+    // Only cards have a limit; switching away drops it rather than saving it hidden.
+    if (!isLiability(next)) {
+      setCreditLimitText('')
+      setErrors((current) => ({ ...current, creditLimit: undefined }))
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    const nextErrors: typeof errors = {}
-    if (!name.trim()) nextErrors.name = 'Give this account a name'
-    const opening = openingText.trim() === '' ? 0 : parseAmountToMinor(openingText)
-    if (opening === null) nextErrors.opening = 'Use numbers only, with up to 2 decimals'
-    else if (opening > MAX_AMOUNT_MINOR) nextErrors.opening = 'That amount is too large'
-    setErrors(nextErrors)
-    if (Object.keys(nextErrors).length) return
-
-    const magnitude = (negative ? -1 : 1) * opening!
-    // Cards store what is owed as a negative position (see docs/financial-rules.md).
-    const openingMinor = isCard ? -magnitude : magnitude
+    setSubmitError(null)
+    const result = accountValues({
+      type,
+      name,
+      color,
+      institution,
+      openingText,
+      openingNegative: negative,
+      openingDate,
+      creditLimitText,
+    })
+    setErrors(result.errors ?? {})
+    if (!result.values) return
     try {
-      const saved = await save.mutateAsync({
-        id: account?.id,
-        values: { name: name.trim(), type, color, opening_balance_minor: openingMinor, opening_date: openingDate },
-      })
+      const saved = await save.mutateAsync({ id: account?.id, values: result.values })
       onSaved?.(saved.id)
     } catch (error) {
       setSubmitError(friendlyError(error))
@@ -145,29 +255,73 @@ export function AccountForm({ account, onSaved, submitLabel }: AccountFormProps)
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-5">
-      <div className="flex flex-col gap-2">
-        <span className="label-mono" id="account-type-label">
-          Type
-        </span>
-        <PillSwitch
-          label="Account type"
-          options={TYPE_OPTIONS}
-          value={type}
-          onChange={(next) => {
-            setType(next)
-            if (!colorTouched) setColor(DEFAULT_TONE[next])
-          }}
-        />
-      </div>
+      <fieldset className="flex flex-col">
+        <legend className="label-mono mb-2">Type</legend>
+        <div className="flex flex-wrap gap-2">
+          {TYPE_OPTIONS.map((option) => {
+            const selected = option.value === type
+            return (
+              <label key={option.value} className="relative">
+                <input
+                  type="radio"
+                  name={`${formId}-type`}
+                  value={option.value}
+                  checked={selected}
+                  onChange={() => changeType(option.value)}
+                  className="peer sr-only"
+                />
+                <span
+                  className={cn(
+                    'pressable flex min-h-12 cursor-pointer items-center gap-2 rounded-pill pl-2 pr-4 font-display text-sm tracking-tight peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ink',
+                    selected
+                      ? 'bg-ink font-extrabold text-paper outline-strong shadow-[3px_3px_0_0_var(--color-orange)]'
+                      : 'bg-paper font-semibold outline-regular hover:bg-peach',
+                  )}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn('grid size-8 place-items-center rounded-full', selected ? 'bg-orange text-ink' : 'bg-peach')}
+                  >
+                    {selected ? <Check className="size-4" strokeWidth={3.5} /> : <AccountGlyph type={option.value} className="size-4" />}
+                  </span>
+                  {option.label}
+                </span>
+              </label>
+            )
+          })}
+        </div>
+      </fieldset>
       <TextField
         label="Name"
-        placeholder={isCard ? 'e.g. HDFC Millennia' : type === 'cash' ? 'e.g. Wallet' : 'e.g. SBI Savings'}
+        placeholder={NAME_PLACEHOLDER[type]}
         value={name}
         maxLength={60}
         onChange={(e) => setName(e.target.value)}
         error={errors.name}
         autoComplete="off"
       />
+      <TextField
+        label="Bank or provider (optional)"
+        placeholder={INSTITUTION_PLACEHOLDER[type]}
+        value={institution}
+        maxLength={INSTITUTION_MAX_LENGTH}
+        onChange={(e) => setInstitution(e.target.value)}
+        error={errors.institution}
+        autoComplete="off"
+      />
+      {isCard && (
+        <TextField
+          label="Credit limit (optional)"
+          prefix="₹"
+          inputMode="decimal"
+          placeholder="e.g. 1,00,000"
+          value={creditLimitText}
+          onChange={(e) => setCreditLimitText(formatAmountInput(e.target.value))}
+          error={errors.creditLimit}
+          hint="Used to estimate your available credit. Leave it blank if you don’t know it."
+          autoComplete="off"
+        />
+      )}
       <div className="flex flex-col gap-2">
         <TextField
           label={isCard ? 'Amount owed when you start tracking' : 'Starting balance'}
@@ -188,7 +342,15 @@ export function AccountForm({ account, onSaved, submitLabel }: AccountFormProps)
           {isCard ? 'The card was in credit (you’d overpaid)' : 'This balance is negative (overdrawn)'}
         </label>
       </div>
-      <TextField label="Tracking since" type="date" value={openingDate} onChange={(e) => e.target.value && setOpeningDate(e.target.value)} />
+      <TextField
+        label="Tracking since"
+        type="date"
+        value={openingDate}
+        onChange={(e) => e.target.value && setOpeningDate(e.target.value)}
+        hint={`${
+          isCard ? 'The amount owed is what the card owed' : 'The starting balance is what the account held'
+        } before the entries you record in Friday. Every entry moves it from there — even ones dated before this day.`}
+      />
 
       <fieldset className="flex flex-col gap-2">
         <legend className="label-mono mb-2">Colour</legend>
@@ -197,7 +359,7 @@ export function AccountForm({ account, onSaved, submitLabel }: AccountFormProps)
             <label key={tone} className="relative">
               <input
                 type="radio"
-                name="account-colour"
+                name={`${formId}-colour`}
                 value={tone}
                 checked={color === tone}
                 onChange={() => {
@@ -298,13 +460,20 @@ export function AccountEditor() {
       </Card>
 
       {account && (
-        <Button
-          icon={account.status === 'active' ? <Archive className="size-5" strokeWidth={2.5} /> : <ArchiveRestore className="size-5" strokeWidth={2.5} />}
-          onClick={() => (account.status === 'active' ? setConfirmArchive(true) : void toggleArchive())}
-          loading={save.isPending && !confirmArchive}
-        >
-          {account.status === 'active' ? 'Archive account' : 'Restore account'}
-        </Button>
+        <div className="flex flex-col gap-2">
+          <Button
+            icon={account.status === 'active' ? <Archive className="size-5" strokeWidth={2.5} /> : <ArchiveRestore className="size-5" strokeWidth={2.5} />}
+            onClick={() => (account.status === 'active' ? setConfirmArchive(true) : void toggleArchive())}
+            loading={save.isPending && !confirmArchive}
+          >
+            {account.status === 'active' ? 'Archive account' : 'Restore account'}
+          </Button>
+          <p className="text-center text-sm text-muted">
+            {account.status === 'active'
+              ? 'Archiving keeps every entry and its history. Friday never deletes an account.'
+              : 'Archived: kept with its history, not in your totals, and closed to new entries.'}
+          </p>
+        </div>
       )}
 
       <ConfirmDialog
@@ -323,17 +492,12 @@ export function AccountEditor() {
 /** Shows exactly how the balance is derived from the ledger. */
 function BalanceBreakdown({ account }: { account: AccountBalanceRow }) {
   const { label, amount } = describeBalance(account)
-  const rows = [
-    { label: `Opening (${formatDate(account.opening_date, { withYear: true })})`, value: account.opening_balance_minor, sign: '' },
-    { label: 'Income', value: account.income_minor, sign: '+' },
-    { label: 'Expenses', value: account.expense_minor, sign: '−' },
-    { label: 'Transfers in', value: account.transfers_in_minor, sign: '+' },
-    { label: 'Transfers out', value: account.transfers_out_minor, sign: '−' },
-  ]
+  const card = isLiability(account.type)
+  const rows = breakdownRows(account, `Opening (${formatDate(account.opening_date, { withYear: true })})`)
   return (
     <Card tone="paper" shadow="lg" padded={false} className="overflow-hidden">
-      <div className={cn('flex items-center gap-3 p-4', TONE_BG[(account.color as AccentTone) ?? 'peach'])}>
-        <span aria-hidden="true" className="grid size-12 place-items-center rounded-full bg-paper outline-regular">
+      <div className={cn('flex items-center gap-3 p-4', TONE_BG[toneOf(account.color)])}>
+        <span aria-hidden="true" className="grid size-12 shrink-0 place-items-center rounded-full bg-paper outline-regular">
           <AccountGlyph type={account.type} />
         </span>
         <div className="min-w-0">
@@ -341,27 +505,43 @@ function BalanceBreakdown({ account }: { account: AccountBalanceRow }) {
             {ACCOUNT_TYPE_LABEL[account.type]} · {label}
           </p>
           <p className="display tabular truncate text-4xl">{amount}</p>
+          {account.institution_name && <p className="truncate text-sm font-semibold">{account.institution_name}</p>}
         </div>
       </div>
-      <dl className="flex flex-col gap-1.5 border-t-[3px] border-ink p-4 text-sm">
-        {rows.map((row) => (
-          <div key={row.label} className="flex justify-between gap-3">
-            <dt className="text-muted">{row.label}</dt>
-            <dd className="tabular font-semibold">
-              {row.sign && row.value !== 0 ? row.sign : ''}
-              {row.sign ? formatMoney(row.value) : formatMoney(row.value)}
-            </dd>
+      {card && <CreditFigures account={account} />}
+      <div className="flex flex-col gap-1.5 border-t-[3px] border-ink p-4 text-sm">
+        <dl className="flex flex-col gap-1.5">
+          {rows.map((row) => (
+            <div key={row.key} className="flex justify-between gap-3">
+              <dt className="flex text-muted">
+                <span className="w-4 shrink-0 font-semibold text-ink">{row.sign}</span>
+                {row.label}
+              </dt>
+              {/* The operator is in the label; the opening balance keeps its own sign. */}
+              <dd className="tabular font-semibold">{formatMoney(row.minor)}</dd>
+            </div>
+          ))}
+          <div className="mt-1 flex justify-between gap-3 border-t-2 border-ink pt-2">
+            <dt className="flex font-bold">
+              <span className="w-4 shrink-0">=</span>
+              Balance
+            </dt>
+            <dd className="tabular font-display text-base font-extrabold">{formatMoney(account.balance_minor)}</dd>
           </div>
-        ))}
-        <div className="mt-1 flex justify-between gap-3 border-t-2 border-ink pt-2">
-          <dt className="font-bold">Balance</dt>
-          <dd className="tabular font-display text-base font-extrabold">{formatMoney(account.balance_minor)}</dd>
-        </div>
-        {account.type === 'credit_card' && (
-          <p className="pt-1 text-xs text-muted">For cards, a negative balance is what you owe.</p>
+        </dl>
+        {card && <p className="pt-1 text-xs text-muted">For cards, a negative balance is what you owe.</p>}
+        {account.pending_minor !== 0 && (
+          <p className="pt-1 text-sm">
+            Includes <span className="tabular font-semibold">{formatMoney(account.pending_minor, { sign: 'always' })}</span> still pending.
+          </p>
         )}
-      </dl>
-      <div className="px-4 pb-4">
+      </div>
+      <div className="flex flex-col items-start gap-3 px-4 pb-4">
+        {account.review_count > 0 && (
+          <div className="self-stretch">
+            <ReviewNote count={account.review_count} onAccount />
+          </div>
+        )}
         <LinkButton
           to={activityHref({ period: 'all', account: account.id })}
           size="sm"
@@ -371,6 +551,38 @@ function BalanceBreakdown({ account }: { account: AccountBalanceRow }) {
         </LinkButton>
       </div>
     </Card>
+  )
+}
+
+/** A card's limit and an estimate of what's left, or a nudge to add the limit. */
+function CreditFigures({ account }: { account: AccountBalanceRow }) {
+  const credit = describeCredit(account)
+  if (!credit) {
+    return (
+      <p className="border-t-[3px] border-ink p-4 text-sm text-muted">
+        No credit limit set. Add one below to see an estimate of your available credit.
+      </p>
+    )
+  }
+  const { remaining } = credit
+  return (
+    <div className="flex flex-col gap-2 border-t-[3px] border-ink p-4">
+      <dl className="grid grid-cols-2 gap-3">
+        <div className="min-w-0">
+          <dt className="label-mono text-muted">Limit</dt>
+          <dd className="tabular font-display text-xl font-extrabold tracking-tight [overflow-wrap:anywhere]">{credit.limit}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="label-mono text-muted">{remaining.overLimit ? 'Over limit by' : 'Available · estimate'}</dt>
+          <dd className="tabular font-display text-xl font-extrabold tracking-tight [overflow-wrap:anywhere]">{remaining.amount}</dd>
+        </div>
+      </dl>
+      <p className="text-sm text-muted">
+        {remaining.overLimit
+          ? `You owe ${remaining.amount} more than your ${credit.limit} limit, based on what Friday knows.`
+          : 'Your limit minus what you owe, based on what Friday knows. Your bank’s figure may differ (holds, fees or interest Friday hasn’t seen).'}
+      </p>
+    </div>
   )
 }
 

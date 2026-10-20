@@ -20,3 +20,9 @@ insert into public.transactions (id, user_id, account_id, type, amount_minor, oc
   ('d0000000-0000-0000-0000-000000000012', 'dddddddd-dddd-dddd-dddd-dddddddddddd', 'd0000000-0000-0000-0000-000000000001', 'income', 500000, '2026-09-01T06:30:00Z', 'Old salary');
 insert into public.transfers (id, user_id, source_account_id, destination_account_id, amount_minor, occurred_at) values
   ('d0000000-0000-0000-0000-000000000021', 'dddddddd-dddd-dddd-dddd-dddddddddddd', 'd0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000002', 20000, '2026-09-02T06:30:00Z');
+-- A refund recorded the old way: income in the seeded "Refunds" category.
+insert into public.transactions (id, user_id, account_id, type, amount_minor, category_id, occurred_at, note)
+select 'd0000000-0000-0000-0000-000000000013', user_id, 'd0000000-0000-0000-0000-000000000001',
+       'income', 2500, id, '2026-09-03T06:30:00Z', 'Old refund'
+from public.categories
+where user_id = 'dddddddd-dddd-dddd-dddd-dddddddddddd' and name = 'Refunds';

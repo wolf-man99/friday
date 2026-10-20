@@ -56,7 +56,7 @@ export function Recurring() {
         const transactionId = await confirm.mutateAsync({ ruleId: rule.id, dueDate, overrides: { occurredAt } })
         toast({
           message: `Recorded ${rule.name} · ${formatMoney(rule.amount_minor)}`,
-          action: { label: 'Edit', onClick: () => navigate(`/entry/${rule.type}/${transactionId}`) },
+          action: { label: 'Edit', onClick: () => navigate(`/entry/${rule.type}/${transactionId}/edit`) },
         })
       } else {
         await skip.mutateAsync({ ruleId: rule.id, dueDate })

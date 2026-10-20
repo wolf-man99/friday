@@ -2,7 +2,7 @@
 // is confirmed saved or deliberately discarded, so a crash, a failed save or a
 // quick trip to another screen never loses it. Drafts never leave the device.
 
-import type { EntryKind } from '@/data/database.types'
+import type { CaptureKind } from '@/data/database.types'
 import type { EntryDraft } from '@/lib/entry'
 
 export type CategorySource = 'suggested' | 'user' | null
@@ -41,7 +41,7 @@ export function isDirty(draft: Pick<CaptureDraft, 'amountText' | 'note' | 'merch
  * merchant, but never carries a category across: an expense category can't
  * describe income, and transfers have none.
  */
-export function switchKind(draft: CaptureDraft, kind: EntryKind, destinationAccountId: string | null): CaptureDraft {
+export function switchKind(draft: CaptureDraft, kind: CaptureKind, destinationAccountId: string | null): CaptureDraft {
   if (kind === draft.kind) return draft
   return {
     ...draft,

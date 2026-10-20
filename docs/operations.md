@@ -9,7 +9,7 @@ user-level exports on top of whatever your Supabase plan provides.
 | ----------------------------- | ----------------------------------------------------------- | ------------------------------------ |
 | Transactions CSV              | Profile → Your data → *Transactions (CSV)*                  | Spreadsheet / manual re-entry        |
 | Accounts & balances CSV       | Profile → Your data → *Accounts & balances (CSV)*           | Reference / reconciliation           |
-| Full JSON backup              | Profile → Your data → *Full backup (JSON)*                  | Every row you own (no in-app import yet) |
+| Full JSON backup              | Profile → Your data → *Full backup (JSON)*                  | Every row you own, including import evidence (no in-app import yet) |
 | Database dump                 | `npx supabase db dump --data-only -f friday-data.sql` (linked project) | `psql` into a project with the migrations applied |
 | Supabase managed backups      | Dashboard → *Database → Backups* (depends on your plan)     | Dashboard restore                    |
 
@@ -33,8 +33,10 @@ Do this once before relying on Friday, and again after schema changes:
 - **One entry:** delete it in the app (soft delete — Undo is available right
   after, and it leaves all totals immediately).
 - **Everything:** Profile → *Delete all my data…* permanently removes accounts,
-  transactions, transfers, recurring items and the audit trail for the signed-in
-  user and resets categories to the defaults.
+  transactions, transfers, recurring items, import evidence (`source_events`,
+  `source_connections`) and the audit trail for the signed-in user and resets
+  categories to the defaults. A later redelivery of an old import is then
+  treated as new.
 - **The login itself:** Supabase dashboard → *Authentication → Users* → delete
   the user. Database rows cascade from `auth.users`.
 

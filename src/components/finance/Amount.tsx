@@ -1,26 +1,41 @@
-import type { EntryKind } from '@/data/database.types'
+import type { EntryKind, TransactionType } from '@/data/database.types'
 import { cn } from '@/components/ui/cn'
+import { directionOf } from '@/lib/ledger'
 import { formatMoney } from '@/lib/money'
 
 interface AmountProps {
   minor: number
-  /** When given, the sign comes from the kind: expense −, income +, transfer none. */
+  /**
+   * When given, the sign comes from the kind: expense −, income +, refund +,
+   * reversal opposite to what it reverses, transfer none.
+   */
   kind?: EntryKind
+  /** For reversals: the side reversed (a reversed purchase is money back). */
+  baseType?: TransactionType | null
   className?: string
-  /** Colour income green (always paired with the + sign). */
+  /** Colour money coming in green (always paired with the + sign). */
   colored?: boolean
 }
 
+const SPOKEN: Record<EntryKind, string> = {
+  expense: 'spent',
+  income: 'received',
+  refund: 'refunded',
+  reversal: 'reversed',
+  transfer: 'moved',
+}
+
 /** Money with an explicit sign so direction never relies on colour (AmountDisplay). */
-export function Amount({ minor, kind, className, colored = true }: AmountProps) {
+export function Amount({ minor, kind, baseType, className, colored = true }: AmountProps) {
   let text: string
   let label: string
-  if (kind === 'expense') {
+  const direction = kind ? directionOf({ kind, base_type: baseType ?? (kind === 'refund' ? 'expense' : null) }) : null
+  if (kind && direction === 'out') {
     text = formatMoney(-Math.abs(minor))
-    label = `${formatMoney(Math.abs(minor))} spent`
-  } else if (kind === 'income') {
+    label = `${formatMoney(Math.abs(minor))} ${SPOKEN[kind]}`
+  } else if (kind && direction === 'in') {
     text = formatMoney(Math.abs(minor), { sign: 'always' })
-    label = `${formatMoney(Math.abs(minor))} received`
+    label = `${formatMoney(Math.abs(minor))} ${SPOKEN[kind]}`
   } else if (kind === 'transfer') {
     text = formatMoney(Math.abs(minor))
     label = `${text} moved`
@@ -31,7 +46,7 @@ export function Amount({ minor, kind, className, colored = true }: AmountProps) 
   return (
     <span
       aria-label={label}
-      className={cn('tabular whitespace-nowrap', colored && kind === 'income' && 'text-positive', className)}
+      className={cn('tabular whitespace-nowrap', colored && direction === 'in' && 'text-positive', className)}
     >
       {text}
     </span>

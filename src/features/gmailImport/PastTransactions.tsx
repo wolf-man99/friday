@@ -46,7 +46,7 @@ import {
 export function PastTransactions({ prompt = false }: { prompt?: boolean }) {
   const latest = useGmailImport()
   const job = latest.data ?? null
-  const driverError = useImportDriver(job)
+  const driver = useImportDriver(job)
   const [picking, setPicking] = useState(false)
   const [dismissed, setDismissed] = useState(false)
 
@@ -57,10 +57,10 @@ export function PastTransactions({ prompt = false }: { prompt?: boolean }) {
   return (
     <section aria-labelledby="past-heading" className="flex flex-col gap-3">
       <h2 id="past-heading" className="display text-2xl">
-        {prompt && !job ? 'Track your past transactions?' : 'Past transactions'}
+        {job ? 'Past transactions' : 'Track your past transactions?'}
       </h2>
-      {driverError && <InlineError message={driverError} />}
-      {job?.status === 'listing' && <Progress title="Finding alert emails…" />}
+      {driver.error && <InlineError message={driver.error} onRetry={driver.retry} />}
+      {job?.status === 'listing' && <Progress title="Finding alert emails…" job={job} />}
       {job?.status === 'scanning' && (
         <Progress
           title="Reading alert emails…"
@@ -73,7 +73,7 @@ export function PastTransactions({ prompt = false }: { prompt?: boolean }) {
       {job?.status === 'importing' && <Progress title="Recording transactions…" detail="This takes a moment." />}
       {job && !running && !picking && <Outcome job={job} onMore={() => setPicking(true)} />}
       {!running && (picking || !job) && !(dismissed && !job) && (
-        <MonthPicker prompt={prompt && !job} onDone={() => setPicking(false)} onNotNow={prompt && !job ? () => setDismissed(true) : undefined} />
+        <MonthPicker intro={!job} onDone={() => setPicking(false)} onNotNow={prompt && !job ? () => setDismissed(true) : undefined} />
       )}
       {!running && !job && dismissed && (
         <Button block icon={<History className="size-5" strokeWidth={2.5} />} onClick={() => setDismissed(false)}>
@@ -91,9 +91,11 @@ export function PastTransactions({ prompt = false }: { prompt?: boolean }) {
 // One loop per import step, even if the page re-renders or remounts.
 const driving = new Set<string>()
 
-function useImportDriver(job: GmailImportJobRow | null): string | null {
+/** Reads, then records, batch by batch. If a request fails, it stops and says so; retry carries on. */
+function useImportDriver(job: GmailImportJobRow | null): { error: string | null; retry: () => void } {
   const client = useQueryClient()
   const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
   const id = job?.id
   const status = job?.status
 
@@ -123,9 +125,9 @@ function useImportDriver(job: GmailImportJobRow | null): string | null {
         void client.invalidateQueries({ queryKey: keys.ledger })
       }
     })()
-  }, [id, status, client])
+  }, [id, status, client, attempt])
 
-  return error
+  return { error, retry: () => setAttempt((n) => n + 1) }
 }
 
 function Progress({ title, detail, value, job }: { title: string; detail?: string; value?: number; job?: GmailImportJobRow }) {
@@ -141,6 +143,7 @@ function Progress({ title, detail, value, job }: { title: string; detail?: strin
       </div>
       {detail && <p className="text-sm text-muted">{detail}</p>}
       <p className="text-sm text-muted">Nothing is recorded until you’ve confirmed your accounts.</p>
+      {cancel.isError && <InlineError message={gmailErrorMessage(cancel.error)} />}
       {job && (
         <Button size="sm" variant="ghost" loading={cancel.isPending} onClick={() => cancel.mutate(job.id)}>
           Cancel import
@@ -154,7 +157,7 @@ function Progress({ title, detail, value, job }: { title: string; detail?: strin
 // Choosing months
 // -----------------------------------------------------------------------------
 
-function MonthPicker({ prompt, onDone, onNotNow }: { prompt: boolean; onDone: () => void; onNotNow?: () => void }) {
+function MonthPicker({ intro, onDone, onNotNow }: { intro: boolean; onDone: () => void; onNotNow?: () => void }) {
   const { todayDate } = useSettings()
   const months = useMemo(() => importMonths(todayDate), [todayDate])
   const [chosen, setChosen] = useState<string[]>(() => months.map((m) => m.value))
@@ -168,7 +171,7 @@ function MonthPicker({ prompt, onDone, onNotNow }: { prompt: boolean; onDone: ()
     <Card tone="peach" shadow="md" className="flex flex-col gap-4">
       <div className="flex flex-col gap-1">
         <p className="font-semibold">
-          {prompt
+          {intro
             ? 'Friday can read the bank, card and wallet alert emails from the last few months and record those transactions.'
             : 'Read alert emails from these months and record their transactions.'}
         </p>
@@ -384,7 +387,7 @@ function Outcome({ job, onMore }: { job: GmailImportJobRow; onMore: () => void }
       <Card className="flex flex-col gap-3">
         <p className="font-semibold">
           {job.status === 'failed'
-            ? 'The last import stopped because Gmail didn’t respond. Nothing was recorded.'
+            ? 'The last import stopped before it finished. Nothing was recorded.'
             : job.status === 'undone'
               ? `The ${monthsLabel(job.months)} import was undone.`
               : 'The last import was cancelled. Nothing was recorded.'}

@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 // The Gmail connection through the real app, the real Edge Function code
 // (run locally under Deno), the real database, and a local fake Google:
-// declining, connecting read-only, previewing alerts (nothing recorded), an
+// declining, connecting read-only (nothing recorded; past months offered), an
 // approval started from another Friday account, and disconnecting.
 
 test.describe.configure({ mode: 'serial' })
@@ -17,6 +17,14 @@ const READONLY = 'https://www.googleapis.com/auth/gmail.readonly'
 
 function psql(sql: string) {
   return execFileSync('psql', ['-q', '-t', '-A', '-d', 'friday_e2e', '-c', sql], { encoding: 'utf8' }).trim()
+}
+
+/** 'August 2026': this month (back = 0) or one before it, as the app names it. */
+function monthName(back: number, withYear = true) {
+  const date = new Date()
+  date.setDate(1)
+  date.setMonth(date.getMonth() - back)
+  return date.toLocaleString('en-GB', withYear ? { month: 'long', year: 'numeric' } : { month: 'long' })
 }
 
 const userId = (email: string) => psql(`select id from auth.users where email = '${email}'`)
@@ -80,7 +88,7 @@ test('saying no on Google’s screen connects nothing', async ({ page }) => {
   expect(psql(`select count(*) from public.source_connections where user_id = '${userId(asha.email)}'`)).toBe('0')
 })
 
-test('connect Gmail read-only, preview alerts, record nothing', async ({ page }) => {
+test('connect Gmail read-only, offer past months, record nothing', async ({ page }) => {
   await signIn(page, asha)
   await toGoogle(page)
   const auth = new URL(page.url()).searchParams
@@ -113,15 +121,8 @@ test('connect Gmail read-only, preview alerts, record nothing', async ({ page })
     expect(psql(`select count(*) from public.source_connections where position('${token}' in row(source_connections.*)::text) > 0`)).toBe('0')
   }
 
-  // Preview: allowlisted alert senders only; nothing recorded.
-  await page.getByRole('button', { name: 'Preview recent alerts' }).click()
-  const preview = page.getByRole('region', { name: 'Recent alerts' })
-  await expect(preview.getByText('Rs.250.00 debited from a/c **1234')).toBeVisible()
-  await expect(preview.getByText('Transaction alert for your ICICI Bank Credit Card')).toBeVisible()
-  await expect(preview.getByText(/nothing was recorded/)).toBeVisible()
-  await expect(preview.getByText('Dinner money — debited?')).toHaveCount(0)
-  await expect(preview.getByText('Your transaction reward')).toHaveCount(0)
-  await expect(page.getByText(/^Last checked/).locator('xpath=following-sibling::dd[1]')).not.toHaveText('Not yet')
+  // Next: importing past months (e2e/gmail-import.spec.ts). Nothing is recorded by connecting.
+  await expect(page.getByRole('heading', { name: 'Track your past transactions?' })).toBeVisible()
   expect(psql(`select count(*) from public.transactions where user_id = '${uid}'`)).toBe('0')
   expect(psql(`select count(*) from public.source_events where user_id = '${uid}'`)).toBe('0')
 
@@ -158,8 +159,14 @@ test('an approval started from another Friday account is refused, and Asha stays
   expect(google.refreshTokens.length).toBe(before + 1)
   expect(google.revoked).toEqual([])
   await expect(page.getByRole('heading', { name: 'asha@gmail.com' })).toBeVisible()
-  await page.getByRole('button', { name: 'Preview recent alerts' }).click()
-  await expect(page.getByRole('region', { name: 'Recent alerts' }).getByText('Rs.250.00 debited from a/c **1234')).toBeVisible()
+  // Gmail still answers for Asha: find this month's alerts, then cancel.
+  await page.getByRole('button', { name: monthName(1) }).click()
+  await page.getByRole('button', { name: monthName(2) }).click()
+  await page.getByRole('button', { name: `Find transactions in ${monthName(0, false)}` }).click()
+  await expect(page.getByText(new RegExp(`Found \\d+ transaction emails? in ${monthName(0, false)}`))).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: 'Cancel import' }).click()
+  await expect(page.getByText('The last import was cancelled. Nothing was recorded.')).toBeVisible()
+  expect(psql(`select count(*) from public.transactions where user_id = '${userId(asha.email)}'`)).toBe('0')
 })
 
 test('disconnecting deletes the stored access and revokes it with Google', async ({ page }) => {

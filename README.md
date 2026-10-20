@@ -29,12 +29,11 @@ went — in a loud, tactile, Riff-inspired interface.
   wallet): evidence waits there instead of touching balances until it is
   confirmed, linked to an existing entry or ignored. No importer is connected
   yet; see [`docs/ledger-model.md`](docs/ledger-model.md).
-- **Gmail connection (foundation)** — connect Gmail read-only (Google OAuth,
-  `gmail.readonly` only), preview recent bank-alert emails, disconnect any
-  time. The refresh token stays encrypted on the server. Import up to three
-  past months: Friday finds your bank accounts, cards and wallets in the alert
-  emails, you confirm each, it records what's clear and sends the rest to
-  Review, with Undo. See [`docs/gmail-connection.md`](docs/gmail-connection.md).
+- **Gmail connection** — connect Gmail read-only (Google OAuth,
+  `gmail.readonly` only), disconnect any time. The refresh token stays
+  encrypted on the server. Import up to three past months: Friday finds your
+  bank accounts, cards and wallets in the alert emails, you confirm each, it
+  records what's clear and sends the rest to Review, with Undo. See [`docs/gmail-connection.md`](docs/gmail-connection.md).
 - **Insights** — spending by category, monthly trend, comparisons with the
   previous period, plain-language observations; everything drills down.
 - **Recurring** — rent, salary, subscriptions. Friday prompts when they're due;

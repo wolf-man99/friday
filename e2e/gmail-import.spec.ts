@@ -15,6 +15,13 @@ const meera = { email: 'gmail-import@example.com', password: 'correct-horse-batt
 function psql(sql: string) {
   return execFileSync('psql', ['-q', '-t', '-A', '-d', 'friday_e2e', '-c', sql], { encoding: 'utf8' }).trim()
 }
+/** 'August 2026': this month (back = 0) or one before it, as the app names it. */
+function monthName(back: number, withYear = true) {
+  const date = new Date()
+  date.setDate(1)
+  date.setMonth(date.getMonth() - back)
+  return date.toLocaleString('en-GB', withYear ? { month: 'long', year: 'numeric' } : { month: 'long' })
+}
 const uid = () => psql(`select id from auth.users where email = '${meera.email}'`)
 
 async function signIn(page: Page) {
@@ -53,7 +60,13 @@ test('connecting Gmail offers to import the last three months', async ({ page })
 
 test('Friday finds the accounts in the emails and asks about each', async ({ page }) => {
   await signIn(page)
-  await page.goto('/connections/gmail')
+  await page.goto('/profile')
+  await page.getByRole('link', { name: /Gmail/ }).click()
+  // A later visit offers the months too, first thing on the page — no raw emails.
+  await expect(page.getByRole('heading', { name: 'Track your past transactions?' })).toBeVisible()
+  await expect(page.getByRole('button', { name: monthName(2) })).toBeInViewport()
+  await expect(page.getByRole('button', { name: /Preview/ })).toHaveCount(0)
+  await page.screenshot({ path: 'test-results/gmail-import-return-visit.png' })
   await page.getByRole('button', { name: 'Find transactions in all 3 months' }).click()
 
   await expect(page.getByText(/Found \d+ transaction emails/)).toBeVisible({ timeout: 30_000 })

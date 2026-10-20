@@ -28,21 +28,6 @@ export async function fetchGmailConnection(): Promise<GmailConnection | null> {
   return data as GmailConnection | null
 }
 
-export interface GmailAlertPreview {
-  id: string
-  receivedAt: string | null
-  from: string
-  subject: string
-  snippet: string
-}
-
-export interface GmailTestFetch {
-  query: string
-  estimate: number
-  messages: GmailAlertPreview[]
-  recorded: false
-}
-
 /** A refusal from the Gmail function, already in words for people. */
 export class GmailServiceError extends Error {
   constructor(
@@ -115,11 +100,6 @@ export function completeGmailConnection(ticket: string): Promise<{ connection: {
 /** Deletes Friday's stored Gmail access and revokes it with Google. */
 export function disconnectGmail(): Promise<{ disconnected: true; revoked: boolean; removed: number }> {
   return invoke({ action: 'disconnect' })
-}
-
-/** A few recent alert emails' metadata. Nothing is stored or recorded. */
-export function testGmailFetch(limit = 5): Promise<GmailTestFetch> {
-  return invoke({ action: 'test-fetch', limit })
 }
 
 export function gmailErrorMessage(error: unknown): string {

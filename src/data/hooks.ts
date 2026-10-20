@@ -447,16 +447,6 @@ export function useDisconnectGmail() {
   })
 }
 
-/** On demand only: previews a few alert emails; records nothing. */
-export function useGmailTestFetch() {
-  const client = useQueryClient()
-  return useMutation({
-    mutationFn: (limit?: number) => gmail.testGmailFetch(limit),
-    // A check updates "last checked", or finds the access was revoked.
-    onSettled: () => client.invalidateQueries({ queryKey: keys.gmail }),
-  })
-}
-
 /** The latest Gmail import (its progress is driven from the Gmail page). */
 export function useGmailImport() {
   return useQuery({ queryKey: keys.gmailImport, queryFn: gmail.fetchLatestImport })

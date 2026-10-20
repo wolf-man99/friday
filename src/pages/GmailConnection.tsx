@@ -8,8 +8,8 @@ import { Card } from '@/components/ui/Card'
 import { ConfirmDialog } from '@/components/ui/Dialog'
 import { InlineError, LoadingBlock } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
-import { callbackErrorMessage, gmailErrorMessage, type GmailConnection as Connection, type GmailTestFetch } from '@/data/gmail'
-import { useCompleteGmail, useDisconnectGmail, useGmailConnection, useGmailTestFetch, useStartGmail } from '@/data/hooks'
+import { callbackErrorMessage, gmailErrorMessage, type GmailConnection as Connection } from '@/data/gmail'
+import { useCompleteGmail, useDisconnectGmail, useGmailConnection, useStartGmail } from '@/data/hooks'
 import { formatDateTime } from '@/features/detail/describe'
 import { PastTransactions } from '@/features/gmailImport/PastTransactions'
 import { friendlyError } from '@/lib/errors'
@@ -17,10 +17,10 @@ import { friendlyError } from '@/lib/errors'
 export const GMAIL_PATH = '/connections/gmail'
 
 /**
- * Connect Gmail (read-only) so Friday can later read bank alert emails. This
- * screen also finishes the OAuth round trip: Google → gmail-oauth-callback →
- * here with #ticket=… (or ?gmail_error=…), which only the user who started it
- * can complete. Nothing here records a transaction.
+ * Connect Gmail (read-only), then import past months from bank alert emails
+ * (features/gmailImport). This screen also finishes the OAuth round trip:
+ * Google → gmail-oauth-callback → here with #ticket=… (or ?gmail_error=…),
+ * which only the user who started it can complete.
  */
 export function GmailConnection() {
   const location = useLocation()
@@ -134,8 +134,8 @@ function NotConnected() {
       <div className="flex flex-col gap-1">
         <h2 className="display text-2xl">Not connected</h2>
         <p>
-          Connect the Gmail account your bank, card and wallet alerts go to. For now Friday only connects and lets you
-          preview what it would see — it doesn’t record anything from email yet.
+          Connect the Gmail account your bank, card and wallet alerts go to. Friday can then bring in your transactions
+          from this month and the two before it — you confirm each account first.
         </p>
       </div>
       <ConnectButton label="Connect Gmail" />
@@ -150,7 +150,6 @@ function Connected({ connection, justConnected }: { connection: Connection; just
   const { timeZone } = useSettings()
   const toast = useToast()
   const disconnect = useDisconnectGmail()
-  const check = useGmailTestFetch()
   const [confirming, setConfirming] = useState(false)
   const [disconnectError, setDisconnectError] = useState<string | null>(null)
   const needsReconnect = connection.status === 'needs_reconnect'
@@ -177,18 +176,14 @@ function Connected({ connection, justConnected }: { connection: Connection; just
           <p className="label-mono">{needsReconnect ? 'Needs reconnecting' : 'Connected · read-only'}</p>
           <h2 className="display break-all text-2xl">{connection.account_email}</h2>
         </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-          {connection.connected_at && (
-            <>
-              <dt className="text-muted">Connected</dt>
-              <dd>{formatDateTime(connection.connected_at, timeZone)}</dd>
-            </>
-          )}
-          <dt className="text-muted">Last checked</dt>
-          <dd>{connection.last_checked_at ? formatDateTime(connection.last_checked_at, timeZone) : 'Not yet'}</dd>
-        </dl>
+        {connection.connected_at && (
+          <p className="text-sm">
+            <span className="text-muted">Connected </span>
+            {formatDateTime(connection.connected_at, timeZone)}
+          </p>
+        )}
 
-        {needsReconnect ? (
+        {needsReconnect && (
           <>
             <p>
               Google stopped accepting Friday’s access — usually because it was removed in your Google account or the
@@ -196,24 +191,14 @@ function Connected({ connection, justConnected }: { connection: Connection; just
             </p>
             <ConnectButton label="Reconnect Gmail" />
           </>
-        ) : (
-          <Button
-            block
-            icon={<MailSearch className="size-5" strokeWidth={2.5} />}
-            loading={check.isPending}
-            onClick={() => check.mutate(5)}
-          >
-            Preview recent alerts
-          </Button>
         )}
-        <Button variant="danger" block icon={<Unplug className="size-5" strokeWidth={2.5} />} onClick={() => setConfirming(true)}>
-          Disconnect Gmail
-        </Button>
       </Card>
 
-      {check.isError && <InlineError message={gmailErrorMessage(check.error)} />}
-      {check.data && !needsReconnect && <Preview result={check.data} timeZone={timeZone} />}
       {!needsReconnect && <PastTransactions prompt={justConnected} />}
+
+      <Button variant="danger" block icon={<Unplug className="size-5" strokeWidth={2.5} />} onClick={() => setConfirming(true)}>
+        Disconnect Gmail
+      </Button>
 
       <ConfirmDialog
         open={confirming}
@@ -243,47 +228,6 @@ function Connected({ connection, justConnected }: { connection: Connection; just
       />
     </>
   )
-}
-
-function Preview({ result, timeZone }: { result: GmailTestFetch; timeZone: string }) {
-  return (
-    <section aria-labelledby="gmail-preview-heading" className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <h2 id="gmail-preview-heading" className="display text-2xl">
-          Recent alerts
-        </h2>
-        <p className="text-sm text-muted">
-          {result.messages.length === 0
-            ? 'No alert emails from known bank, card or wallet senders in the last 30 days.'
-            : `The ${result.messages.length} newest alert emails from known senders. Preview only — nothing was recorded.`}
-        </p>
-      </div>
-      {result.messages.length > 0 && (
-        <ul className="flex flex-col gap-2">
-          {result.messages.map((message) => (
-            <li key={message.id}>
-              <Card className="flex flex-col gap-1">
-                <p className="label-mono truncate">{message.from}</p>
-                <p className="font-semibold">{message.subject || '(no subject)'}</p>
-                {message.snippet && <p className="line-clamp-2 text-sm text-muted">{decodeEntities(message.snippet)}</p>}
-                {message.receivedAt && <p className="text-xs text-muted">{formatDateTime(message.receivedAt, timeZone)}</p>}
-              </Card>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-/** Gmail snippets arrive HTML-escaped (&amp;, &#39;); show them as text, never as HTML. */
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(Number(code)))
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
 }
 
 function WhatFridayReads() {

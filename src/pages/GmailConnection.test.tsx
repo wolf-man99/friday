@@ -4,7 +4,7 @@ import { StrictMode } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '@/components/ui/Toast'
-import type { GmailConnection as Connection, GmailTestFetch } from '@/data/gmail'
+import type { GmailConnection as Connection } from '@/data/gmail'
 import { GmailServiceError } from '@/data/gmail'
 import { GmailConnection } from './GmailConnection'
 
@@ -13,7 +13,6 @@ let connectionError: unknown = null
 const start = vi.fn()
 const complete = vi.fn()
 const disconnect = vi.fn()
-const testFetch = vi.fn()
 
 vi.mock('@/app/settings', () => ({ useSettings: () => ({ timeZone: 'Asia/Kolkata' }) }))
 // Importing past months has its own tests (src/features/gmailImport).
@@ -59,7 +58,6 @@ vi.mock('@/data/hooks', async () => {
     useStartGmail: () => useFakeMutation(() => start()),
     useCompleteGmail: () => useFakeMutation((ticket: string) => complete(ticket)),
     useDisconnectGmail: () => useFakeMutation(() => disconnect()),
-    useGmailTestFetch: () => useFakeMutation((limit?: number) => testFetch(limit)),
   }
 })
 
@@ -105,7 +103,7 @@ const assign = vi.fn()
 beforeEach(() => {
   connection = null
   connectionError = null
-  for (const fn of [start, complete, disconnect, testFetch, assign]) fn.mockReset()
+  for (const fn of [start, complete, disconnect, assign]) fn.mockReset()
   vi.stubGlobal('location', { ...window.location, assign })
 })
 
@@ -119,7 +117,7 @@ describe('Gmail connection — not connected', () => {
     renderPage()
     expect(screen.getByRole('heading', { name: 'Not connected' })).toBeInTheDocument()
     expect(screen.getByText(/Read-only\./)).toBeInTheDocument()
-    expect(screen.getByText(/doesn’t record anything from email yet/)).toBeInTheDocument()
+    expect(screen.getByText(/you confirm each account first/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Connect Gmail' }))
     await waitFor(() => expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?scope=gmail.readonly'))
   })
@@ -182,35 +180,16 @@ describe('Gmail connection — coming back from Google', () => {
 })
 
 describe('Gmail connection — connected', () => {
-  it('shows the account and previews alert metadata without recording anything', async () => {
+  it('shows the account, then offers past transactions; no preview of raw emails', () => {
     connection = active
-    const result: GmailTestFetch = {
-      query: 'from:(hdfcbank.net) …',
-      estimate: 1,
-      recorded: false,
-      messages: [
-        {
-          id: 'm1',
-          receivedAt: '2026-10-18T05:00:00Z',
-          from: 'HDFC Bank <alerts@hdfcbank.net>',
-          subject: 'Rs.250.00 debited',
-          snippet: 'Rs.250.00 debited from a/c **1234 to Blue Tokai &amp; Co',
-        },
-      ],
-    }
-    testFetch.mockResolvedValue(result)
     renderPage()
     expect(screen.getByRole('heading', { name: 'asha@gmail.com' })).toBeInTheDocument()
     expect(screen.getByText('Connected · read-only')).toBeInTheDocument()
-    expect(screen.getByText('past transactions')).toBeInTheDocument()
-    expect(screen.getByText('Not yet')).toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole('button', { name: 'Preview recent alerts' }))
-    const preview = await screen.findByRole('region', { name: 'Recent alerts' })
-    expect(within(preview).getByText(/nothing was recorded/)).toBeInTheDocument()
-    expect(within(preview).getByText('Rs.250.00 debited')).toBeInTheDocument()
-    expect(within(preview).getByText(/Blue Tokai & Co/)).toBeInTheDocument()
-    expect(testFetch).toHaveBeenCalledWith(5)
+    // Importing is the next step, before Disconnect.
+    const past = screen.getByText('past transactions')
+    const disconnectButton = screen.getByRole('button', { name: 'Disconnect Gmail' })
+    expect(past.compareDocumentPosition(disconnectButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Preview/ })).not.toBeInTheDocument()
   })
 
   it('disconnects after confirming, and says whether Google confirmed the revoke', async () => {
@@ -230,6 +209,6 @@ describe('Gmail connection — connected', () => {
     renderPage()
     expect(screen.getByText('Needs reconnecting')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Reconnect Gmail' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Preview recent alerts' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/past transactions/)).not.toBeInTheDocument()
   })
 })

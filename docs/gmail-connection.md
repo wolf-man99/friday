@@ -1,17 +1,17 @@
-# Gmail connection (foundation)
+# Gmail connection
 
-Friday can connect a person's Gmail **read-only**, so a later step can read the
-transaction alerts their bank, card and wallet providers email them. This step
-is only the foundation:
+Friday can connect a person's Gmail **read-only** and import the transaction
+alerts their bank, card and wallet providers email them:
 
 - connect (Google OAuth 2.0 authorization-code flow + PKCE, offline access,
   `https://www.googleapis.com/auth/gmail.readonly` and nothing else)
 - store the refresh token **encrypted, server-side only**
 - disconnect (delete the stored access and revoke it with Google)
-- a manual, bounded **preview** of recent alert emails' metadata
+- import past months on request (see *Importing past months* below): the
+  Gmail page offers this month and the two before it as soon as Gmail is
+  connected, and on every later visit until an import has run
 
-It does **not** read mail continuously, use Pub/Sub or create any transaction.
-Nothing from email reaches the ledger or the review queue yet.
+It does **not** read mail continuously or use Pub/Sub.
 
 ## How a connection works
 
@@ -107,12 +107,16 @@ every token, including one a working connection uses. So:
 - *Delete all my data* removes every Gmail row (the app disconnects first, so
   Google revokes the access too). Deleting the login cascades everything.
 
-Access tokens are never stored: each preview gets a fresh one from the refresh
+Access tokens are never stored: each request gets a fresh one from the refresh
 token and discards it.
 
 ## The preview (test fetch)
 
-`gmail-connection` action `test-fetch` (button *Preview recent alerts*):
+`gmail-connection` action `test-fetch`. The app no longer calls it: the Gmail
+page used to have a *Preview recent alerts* button, but the raw emails it
+listed (subjects and snippets, promotions included) read as noise next to the
+import, so the page leads with the import instead. The action stays as a
+diagnostic and is covered by the function tests:
 
 - Gmail search: `from:(<senders>) (debited OR credited OR spent OR transaction
   OR txn OR upi OR purchase OR withdrawn OR refund OR reversed)
@@ -169,6 +173,13 @@ import **this month and the two before it** — the person picks any of them.
    any a refund now depends on), takes its items out of Review and forgets its
    evidence, so the months can be imported again. Hand-typed entries are never
    touched; accounts it created stay.
+
+Each step is a short request, driven from the Gmail page while it's open. If a
+request fails (a dropped connection, a function timeout) the page says so with
+*Try again*, which carries on where it stopped; leaving the page and coming
+back carries on too. An import interrupted while finding, reading or before
+its accounts are confirmed can be cancelled (nothing is recorded), and the
+months are offered again.
 
 **Balances stay right.** When older history is imported into an account that
 started tracking later, the account gets a `balance_from` date (its old start)
@@ -284,13 +295,13 @@ POSTGREST_BIN=/path/to/postgrest npm run test:e2e -- e2e/gmail.spec.ts
 
 ## Known limits and next steps
 
-- **Ingestion**: parse alert emails into `source_events` through the existing
-  import boundary (`ingest_source_event_for`), then Gmail push notifications
-  (Pub/Sub + `history.list`) for continuous sync. Not started.
-- **Sender authenticity**: the preview checks the `From` address (the real
-  one, not a look-alike display name) against the allowlist, but `From` can be
-  forged. Before anything is recorded from email, check
-  DKIM/`Authentication-Results`.
+- **Continuous sync**: past months are imported on request; new alerts are
+  not yet picked up automatically (Gmail push notifications via Pub/Sub +
+  `history.list`). Not started.
+- **Sender authenticity**: the `From` address (the real one, not a look-alike
+  display name) is checked against the allowlist, and an import records
+  automatically only from senders whose DKIM/DMARC passed in Gmail's
+  `Authentication-Results`; the rest wait in Review.
 - **Abandoned approvals** are swept (and revoked where safe) when their owner
   next starts a connection; a scheduled sweep across all users would tighten
   that.

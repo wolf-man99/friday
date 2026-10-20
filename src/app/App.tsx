@@ -20,6 +20,7 @@ import { ResetPassword } from '@/pages/ResetPassword'
 import { Review } from '@/pages/Review'
 import { SignIn } from '@/pages/SignIn'
 import { AuthProvider, RequireAuth } from './auth'
+import { ScrollToTop } from './ScrollToTop'
 import { SettingsGate } from './settings'
 
 const queryClient = new QueryClient({
@@ -37,6 +38,7 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <ScrollToTop />
         <AuthProvider>
           <ToastProvider>
             <OfflineBanner />

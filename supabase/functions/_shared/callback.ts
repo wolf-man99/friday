@@ -2,22 +2,18 @@
 // GET ?code&state (or ?error&state). Validates the one-time state, exchanges
 // the code server-side with the client secret and PKCE verifier, checks the
 // granted scope, encrypts the refresh token and parks it until the same
-// signed-in user confirms it in Friday. Always ends with a redirect to
+// signed-in user, in the same browser, confirms it in Friday.
+//
+// Tokens it can't keep (wrong scope, no refresh token, a failure) are dropped,
+// not revoked: they never left this function, so nobody holds them, and
+// revoking with Google would end every Friday connection to that Gmail
+// account — possibly one that's working. Always ends with a redirect to
 // FRIDAY_APP_URL/connections/gmail (#ticket=… or ?gmail_error=<code>) — never a
 // page that shows a code or token.
 
 import type { GmailConfig } from './config.ts'
 import { isToken, randomToken, refreshTokenContext, sha256Hex, type TokenCipher } from './crypto.ts'
-import {
-  exchangeCode,
-  getGmailAddress,
-  GMAIL_READONLY_SCOPE,
-  GoogleError,
-  googleEndpoints,
-  revokeToken,
-  type Fetch,
-  type TokenGrant,
-} from './google.ts'
+import { exchangeCode, getGmailAddress, GMAIL_READONLY_SCOPE, GoogleError, googleEndpoints, type Fetch } from './google.ts'
 import { json, redirect, type Logger } from './http.ts'
 import type { GmailStore } from './store.ts'
 
@@ -67,23 +63,18 @@ export async function handleCallback(req: Request, deps: CallbackDeps): Promise<
 
   if (!isToken(state)) return fail(state ? 'invalid_state' : 'invalid_request')
 
-  // Once Google has issued tokens, any failure revokes them before giving up.
-  let grant: TokenGrant | null = null
-  const revokeGrant = async () => {
-    if (grant) await revokeToken(deps.fetch, endpoints, grant.refreshToken ?? grant.accessToken)
-  }
-
   try {
     // Used up even when Google reports an error, so it can never be replayed.
     const consumed = await deps.store.consume(await sha256Hex(state))
     if (consumed.outcome === 'expired') return fail('link_expired')
     if (consumed.outcome === 'used') return fail('link_used')
-    if (consumed.outcome !== 'ok' || !consumed.userId || !consumed.codeVerifier) return fail('invalid_state')
+    if (consumed.outcome !== 'ok' || !consumed.userId || !consumed.codeVerifier || !consumed.browserHash) return fail('invalid_state')
     const userId = consumed.userId
 
     if (googleError) return fail(googleError === 'access_denied' ? 'access_denied' : 'google_error')
     if (!code || code.length > 2048) return fail('invalid_request')
 
+    let grant
     try {
       grant = await exchangeCode(deps.fetch, endpoints, {
         clientId: deps.config.clientId,
@@ -98,20 +89,13 @@ export async function handleCallback(req: Request, deps: CallbackDeps): Promise<
     }
 
     // Granular consent lets people untick the Gmail box: then there's nothing to connect.
-    if (!grant.scopes.includes(GMAIL_READONLY_SCOPE)) {
-      await revokeGrant()
-      return fail('scope_missing')
-    }
-    if (!grant.refreshToken) {
-      await revokeGrant()
-      return fail('no_refresh_token')
-    }
+    if (!grant.scopes.includes(GMAIL_READONLY_SCOPE)) return fail('scope_missing')
+    if (!grant.refreshToken) return fail('no_refresh_token')
 
     let accountEmail: string
     try {
       accountEmail = await getGmailAddress(deps.fetch, endpoints, grant.accessToken)
     } catch {
-      await revokeGrant()
       return fail('profile_failed')
     }
 
@@ -123,12 +107,12 @@ export async function handleCallback(req: Request, deps: CallbackDeps): Promise<
       // Friday keeps exactly the scope it asked for.
       scopes: [GMAIL_READONLY_SCOPE],
       refreshTokenEnc: await deps.cipher.encrypt(grant.refreshToken, refreshTokenContext(userId)),
+      browserHash: consumed.browserHash,
     })
     deps.log('gmail_callback_ok', { outcome: 'pending_confirmation' })
     // In the fragment: browsers never send it to a server, a log or a Referer.
     return back({ ticket }, { inFragment: true })
   } catch {
-    await revokeGrant().catch(() => undefined)
     return fail('server_error')
   }
 }

@@ -19,7 +19,7 @@ function errorOf(response: Response): string | null {
 
 Deno.test('a valid round trip parks an encrypted grant for the user who started it', async () => {
   const h = await setup()
-  const { redirected, location, ticket, callbackUrl } = await h.authorize('session-a', { email: 'Asha@Gmail.com' })
+  const { redirected, location, ticket, callbackUrl, browserKey } = await h.authorize('session-a', { email: 'Asha@Gmail.com' })
 
   assert.equal(redirected.status, 303)
   assert.equal(redirected.headers.get('referrer-policy'), 'no-referrer')
@@ -34,6 +34,7 @@ Deno.test('a valid round trip parks an encrypted grant for the user who started 
   assert.equal(grant.email, 'asha@gmail.com')
   assert.deepEqual(grant.scopes, [GMAIL_READONLY_SCOPE])
   assert.ok(h.store.grants.has(await sha256Hex(ticket!)), 'only the ticket’s hash is stored')
+  assert.equal(grant.browserHash, await sha256Hex(browserKey), 'bound to the browser that started, by hash')
   // Sealed with the owner's id: decrypts for A, not for B.
   const refresh = await h.cipher.decrypt(grant.enc, refreshTokenContext(USERS.a))
   assert.ok(h.google.refreshTokens.has(refresh))
@@ -133,38 +134,45 @@ Deno.test('Google unreachable during the exchange', async () => {
   assert.equal((await h.authorize('session-a')).error, 'exchange_failed')
 })
 
-Deno.test('unticking Gmail on Google’s granular consent screen: nothing to connect, tokens revoked', async () => {
+// Tokens the callback can't keep are dropped, never stored and never revoked:
+// Google's revoke would end every Friday connection to that Gmail account.
+
+Deno.test('unticking Gmail on Google’s granular consent screen: nothing to connect, nothing kept', async () => {
   const h = await setup()
   const { error } = await h.authorize('session-a', { scope: 'openid' })
   assert.equal(error, 'scope_missing')
   assert.equal(h.store.grants.size, 0)
-  assert.equal(h.google.revoked.size, 2, 'the refresh token (and the access tokens from it) are revoked')
+  assert.equal(h.google.revoked.size, 0)
 })
 
-Deno.test('no refresh token from Google: refused and the access token revoked', async () => {
+Deno.test('no refresh token from Google: refused, nothing kept', async () => {
   const h = await setup()
   h.google.omitRefreshToken = true
   const { error } = await h.authorize('session-a')
   assert.equal(error, 'no_refresh_token')
   assert.equal(h.store.grants.size, 0)
-  assert.equal(h.google.revoked.size, 1)
 })
 
-Deno.test('the Gmail profile can’t be read: refused and revoked', async () => {
+Deno.test('the Gmail profile can’t be read: refused, nothing kept', async () => {
   const h = await setup()
   h.google.failures.set('/profile', { status: 500 })
   const { error } = await h.authorize('session-a')
   assert.equal(error, 'profile_failed')
   assert.equal(h.store.grants.size, 0)
-  assert.ok(h.google.revoked.size >= 1)
 })
 
-Deno.test('the database failing after Google issued tokens: revoked, generic error', async () => {
+Deno.test('a failed reconnect never breaks the connection that already works', async () => {
   const h = await setup()
-  h.store.failNext = 'storePendingGrant'
-  const { error } = await h.authorize('session-a')
-  assert.equal(error, 'server_error')
-  assert.ok(h.google.revoked.size >= 1, 'tokens Friday couldn’t store are revoked, not left live')
+  await h.connect('session-a', { email: 'asha@gmail.com' })
+  h.google.mailboxes.set('asha@gmail.com', [])
+  for (const failure of ['storePendingGrant', 'scope', 'profile'] as const) {
+    if (failure === 'storePendingGrant') h.store.failNext = 'storePendingGrant'
+    if (failure === 'profile') h.google.failures.set('/profile', { status: 500 })
+    const { error } = await h.authorize('session-a', { email: 'asha@gmail.com', scope: failure === 'scope' ? 'openid' : undefined })
+    assert.ok(error, failure)
+    assert.equal(h.google.revoked.size, 0, `${failure}: nothing revoked`)
+    assert.equal((await h.call('session-a', { action: 'test-fetch' })).status, 200, `${failure}: still connected`)
+  }
 })
 
 Deno.test('the database failing before Google is called', async () => {

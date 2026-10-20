@@ -224,7 +224,6 @@ function NavRow({ to, icon, label, detail, highlight }: { to: string; icon: Reac
 function DeleteAllDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [typed, setTyped] = useState('')
   const remove = useDeleteAllData()
-  const gmail = useGmailConnection()
   const disconnectGmail = useDisconnectGmail()
   const toast = useToast()
   const [error, setError] = useState<string | null>(null)
@@ -245,8 +244,9 @@ function DeleteAllDialog({ open, onClose }: { open: boolean; onClose: () => void
           loading={remove.isPending || disconnectGmail.isPending}
           onClick={async () => {
             try {
-              // Revoke Gmail access with Google first; deleting the data removes it from Friday regardless.
-              if (gmail.data) await disconnectGmail.mutateAsync().catch(() => undefined)
+              // Revoke Gmail access with Google first (harmless if none); deleting
+              // the data removes it from Friday regardless.
+              await disconnectGmail.mutateAsync().catch(() => undefined)
               await remove.mutateAsync()
               toast({ message: 'All your Friday data was deleted.' })
               setTyped('')

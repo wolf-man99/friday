@@ -48,18 +48,18 @@ Deno.test('no secret reaches the browser, the logs or the database in plain text
 
     // Connect: start (browser gets the Google URL), Google redirect, complete.
     const started = await record(await h.call('session-a', { action: 'start' }))
-    const { url } = await started.json()
+    const { url, browserKey } = await started.json()
     const state = new URL(url).searchParams.get('state')!
     transientSecrets.push(state)
     const back = await h.google.consent(url, { email: 'asha@gmail.com' })
     const redirected = await record(await h.callback(back))
     const ticket = new URLSearchParams(new URL(redirected.headers.get('location')!).hash.slice(1)).get('ticket')!
-    await record(await h.call('session-a', { action: 'complete', ticket }))
-    // The browser legitimately holds state and ticket (single-use); they must not be logged or stored.
+    await record(await h.call('session-a', { action: 'complete', ticket, browserKey }))
+    // The browser legitimately holds state, ticket and its key; they must not be logged or stored.
 
     // Use it, fail it, reconnect, disconnect; plus every refusal path.
     await record(await h.call('session-a', { action: 'test-fetch' }))
-    await record(await h.call('session-b', { action: 'complete', ticket }))
+    await record(await h.call('session-b', { action: 'complete', ticket, browserKey }))
     await record(await h.call('session-a', { action: 'complete', ticket: 'x'.repeat(43) }))
     h.google.failures.set('/messages', { status: 500, body: { error: { message: 'boom ya29.leaky' } } })
     await record(await h.call('session-a', { action: 'test-fetch' }))
@@ -69,7 +69,7 @@ Deno.test('no secret reaches the browser, the logs or the database in plain text
     await h.connect('session-a', { email: 'asha@gmail.com' })
     await record(await h.call('session-a', { action: 'disconnect' }))
     await record(await h.callback(back))
-    transientSecrets.push(ticket)
+    transientSecrets.push(ticket, browserKey)
   })
 
   const issued = h.google.issued // every code, access token and refresh token Google handed out

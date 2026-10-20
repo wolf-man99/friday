@@ -20,10 +20,12 @@ Nothing from email reaches the ledger or the review queue yet.
  ────────────────────          ────────────────           ──────            ────────────────────
  Connect Gmail ──POST start──▶ state = 32 random bytes
    (Supabase session)          verifier = 48 random bytes
+                               browser key = 32 random bytes
                                store sha256(state), verifier,
-                               user id, expires in 10 min
-            ◀── { url } ────── consent URL (code, S256 challenge,
-                               offline, prompt=consent)
+                               sha256(browser key), user id,
+                               expires in 10 min
+  keeps browser key ◀── { url, browserKey } ── consent URL (code,
+                               S256 challenge, offline, consent)
  browser goes to Google ───────────────────────────────▶ person approves
                                                          redirect ─────────▶ consume state (one time,
                                                                              unexpired) → user id
@@ -36,9 +38,10 @@ Nothing from email reaches the ledger or the review queue yet.
                                                                              (10 min) behind a one-time
                                                                              ticket
  /connections/gmail#ticket=… ◀──────────────────────────────── 303 ─────────
- POST complete {ticket} ─────▶ grant.user == signed-in user?
+ POST complete ──────────────▶ grant.user == signed-in user and
+   {ticket, browserKey}        sha256(browserKey) matches?
    (Supabase session)          yes → activate connection
-                               no  → delete + revoke with Google
+                               no  → delete (+ revoke, see below)
 ```
 
 Why the extra **ticket** step: Google's redirect carries no Friday session, so
@@ -46,16 +49,35 @@ the callback can't know whose browser it is. Without confirmation, someone
 could start a connection from *their* Friday account and trick you into
 approving it, attaching your Gmail to their account. The callback therefore
 only parks the grant; it becomes a connection only when the same signed-in
-Friday user who started it completes the ticket. Any other user completing it
-destroys the grant and revokes the token. The ticket travels in the URL
-fragment, which browsers never send to servers, logs or `Referer` headers, and
-the app removes it from the address bar immediately.
+Friday user, **in the same browser** (the key the app kept since *start*),
+completes the ticket. Anyone else completing it destroys the grant — including
+someone whose browser was signed in to the attacker's Friday account. The
+ticket travels in the URL fragment, which browsers never send to servers, logs
+or `Referer` headers, and the app removes it from the address bar immediately.
 
 Callback failures redirect to `/connections/gmail?gmail_error=<code>`:
 `access_denied`, `google_error`, `invalid_request`, `invalid_state`,
 `link_expired`, `link_used`, `exchange_failed`, `scope_missing`,
-`no_refresh_token`, `profile_failed`, `server_error`. Whenever Google had
-already issued tokens, they're revoked before redirecting.
+`no_refresh_token`, `profile_failed`, `server_error`.
+
+### When Friday revokes with Google
+
+Revoking any token ends Friday's **whole** grant for that Gmail account —
+every token, including one a working connection uses. So:
+
+- **Disconnect** revokes, unless another Friday account has the same Gmail
+  account connected (then the token is deleted but not revoked, and the
+  response says `revoked: false`).
+- **Switching** to a different Gmail address revokes the old address's
+  access (same exception).
+- **Reconnecting the same address** replaces the stored token without
+  revoking the old one (that would end the new one too).
+- **Refused or expired approvals** are deleted, and revoked only if no live
+  connection uses that Gmail account.
+- **Callback failures** (wrong scope, no refresh token, profile or database
+  errors) drop the tokens without revoking them: they never left the function,
+  so nobody holds them, and Friday can't always tell which account they're
+  for.
 
 ## Where things are stored
 
@@ -108,8 +130,12 @@ token and discards it.
 - the result goes back to the signed-in user only; nothing is stored except
   `last_checked_at`. No transaction or review item is created.
 - if Google refuses the refresh token (`invalid_grant`, e.g. access removed at
-  myaccount.google.com), the credential is deleted and the connection shows
-  *Needs reconnecting*.
+  myaccount.google.com, or a Testing-mode token's 7 days are up), that exact
+  credential is deleted and the connection shows *Needs reconnecting*.
+- a server problem never deletes anyone's access: a wrong client ID/secret
+  (`invalid_client`) answers *not set up* (503), and a credential that won't
+  decrypt (e.g. a changed `GMAIL_TOKEN_ENCRYPTION_KEY`) answers
+  `credential_unreadable` and is kept; reconnecting replaces it.
 
 ## Logging
 
@@ -118,6 +144,12 @@ Functions log one JSON line per event with an allowlist of fields (`action`,
 tokens, states, tickets, email addresses or message content. Google error
 bodies are reduced to a failure code. Missing configuration is logged by
 setting name only.
+
+Supabase's own platform request logs may record the callback's URL, which
+includes Google's one-time `code` and `state` (Google always sends them in the
+query string). Neither is usable from a log: the code needs the PKCE verifier
+and the client secret and is redeemed within seconds, and the state is
+single-use.
 
 ## Configuration
 
@@ -201,10 +233,16 @@ POSTGREST_BIN=/path/to/postgrest npm run test:e2e -- e2e/gmail.spec.ts
 - **Ingestion**: parse alert emails into `source_events` through the existing
   import boundary (`ingest_source_event_for`), then Gmail push notifications
   (Pub/Sub + `history.list`) for continuous sync. Not started.
-- **Sender authenticity**: the preview trusts the `From` header. Before
-  anything is recorded from email, check DKIM/`Authentication-Results`.
-- **Abandoned approvals** are swept and revoked when their owner next starts
-  a connection; a scheduled sweep across all users would tighten that.
+- **Sender authenticity**: the preview checks the `From` address (the real
+  one, not a look-alike display name) against the allowlist, but `From` can be
+  forged. Before anything is recorded from email, check
+  DKIM/`Authentication-Results`.
+- **Abandoned approvals** are swept (and revoked where safe) when their owner
+  next starts a connection; a scheduled sweep across all users would tighten
+  that.
+- **Deleting the login** in the Supabase dashboard deletes Gmail access from
+  Friday without revoking it at Google; use *Delete all my data* (which
+  disconnects first) or remove Friday at myaccount.google.com/permissions.
 - **Key rotation**: ciphertexts are versioned (`v1.`); rotation would add a
   second key and re-seal on use.
 - If the project's legacy API keys are ever disabled, `SUPABASE_SERVICE_ROLE_KEY`

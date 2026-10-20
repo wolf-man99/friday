@@ -82,7 +82,7 @@ createServer(async (req, res) => {
 
     if (path === '/health') return json(res, 200, { ok: true })
     if (path === '/__inspect') {
-      return json(res, 200, { refreshTokens: [...refreshTokens.keys()], revoked: [...revoked] })
+      return json(res, 200, { refreshTokens: [...refreshTokens.keys()], revoked: [...revoked].filter((t) => refreshTokens.has(t)) })
     }
 
     if (path === '/o/oauth2/v2/auth') {
@@ -144,8 +144,10 @@ createServer(async (req, res) => {
 
     if (path === '/revoke' && req.method === 'POST') {
       const value = (await form(req)).get('token')
-      if (!refreshTokens.has(value) && !accessTokens.has(value)) return json(res, 400, { error: 'invalid_token' })
-      revoked.add(value)
+      const email = refreshTokens.get(value) ?? accessTokens.get(value)
+      if (!email) return json(res, 400, { error: 'invalid_token' })
+      // Like Google: the app's whole grant for that account ends — every token.
+      for (const [token, owner] of [...refreshTokens, ...accessTokens]) if (owner === email) revoked.add(token)
       return json(res, 200, {})
     }
 

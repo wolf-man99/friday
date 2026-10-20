@@ -71,11 +71,16 @@ export function buildAlertQuery(senders: readonly string[], lookbackDays: number
   ].join(' ')
 }
 
-/** The address inside a From header: "HDFC Bank <alerts@hdfcbank.net>" → alerts@hdfcbank.net */
+/**
+ * The address in a From header: "HDFC Bank <alerts@hdfcbank.net>" → alerts@hdfcbank.net.
+ * The real address is the last <…>; anything before it is display name, which
+ * anyone can set (e.g. "<alerts@hdfcbank.net>" <x@evil.example>).
+ */
 export function senderAddress(fromHeader: string): string {
-  const angle = fromHeader.match(/<([^<>\s]+@[^<>\s]+)>/)
-  const bare = fromHeader.match(/[^\s<>"]+@[^\s<>"]+/)
-  return (angle?.[1] ?? bare?.[0] ?? '').toLowerCase()
+  const angles = [...fromHeader.matchAll(/<([^<>\s]+@[^<>\s]+)>/g)]
+  if (angles.length > 0) return angles[angles.length - 1][1].toLowerCase()
+  const bare = fromHeader.trim().match(/^[^\s<>"]+@[^\s<>"]+$/)
+  return (bare?.[0] ?? '').toLowerCase()
 }
 
 /** Does the sender match an allowlist rule (exact address, the domain, or a subdomain of it)? */

@@ -32,6 +32,8 @@ export function googleEndpoints(testOrigin: string | null = null): GoogleEndpoin
 
 export type GoogleFailure =
   | 'invalid_grant' // refresh token revoked/expired, or the code was already used
+  | 'invalid_client' // Friday's client ID/secret is wrong: a server problem, not the person's
+  | 'unauthorized' // an access token was refused
   | 'access_denied'
   | 'insufficient_scope'
   | 'rate_limited'
@@ -65,12 +67,15 @@ async function failureFrom(response: Response): Promise<GoogleError> {
   } catch {
     // The body isn't needed beyond its error code.
   }
+  // Only Google's own invalid_grant means the person's access is gone; a wrong
+  // client secret (401 invalid_client) must never be mistaken for it.
   if (code === 'invalid_grant') return new GoogleError('invalid_grant', response.status)
+  if (code === 'invalid_client' || code === 'unauthorized_client') return new GoogleError('invalid_client', response.status)
   if (code === 'access_denied') return new GoogleError('access_denied', response.status)
   if (response.status === 403 && (code.includes('permission') || code.includes('scope'))) {
     return new GoogleError('insufficient_scope', response.status)
   }
-  if (response.status === 401) return new GoogleError('invalid_grant', response.status)
+  if (response.status === 401) return new GoogleError('unauthorized', response.status)
   if (response.status === 429) return new GoogleError('rate_limited', response.status)
   if (response.status >= 500) return new GoogleError('unavailable', response.status)
   return new GoogleError('bad_response', response.status)
@@ -157,7 +162,11 @@ export async function refreshAccessToken(
   return body.access_token
 }
 
-/** Revokes a refresh (or access) token. Resolves true when Google confirmed it. */
+/**
+ * Revokes a refresh (or access) token. Resolves true when Google confirmed it.
+ * Google then ends Friday's whole grant for that Gmail account — every token,
+ * not just this one — so callers only revoke what nothing else depends on.
+ */
 export async function revokeToken(fetchFn: Fetch, endpoints: GoogleEndpoints, token: string): Promise<boolean> {
   try {
     const response = await call(fetchFn, endpoints.revoke, {

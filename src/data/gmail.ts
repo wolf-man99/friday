@@ -77,14 +77,39 @@ async function invoke<T>(body: Record<string, unknown>): Promise<T> {
 
 const NOT_DEPLOYED = 'If Gmail was only just set up, check that the gmail-connection function is deployed.'
 
-/** Google's consent page for this user (the function stores the one-time state). */
-export function startGmailConnection(): Promise<{ url: string }> {
-  return invoke({ action: 'start' })
+// The server binds each connection attempt to the browser that started it:
+// this key stays here until Google sends the person back, and completing
+// needs it. A link from someone else's attempt can't be completed here.
+const BROWSER_KEY = 'friday:gmail-browser-key'
+
+function rememberBrowserKey(key: string) {
+  try {
+    localStorage.setItem(BROWSER_KEY, key)
+  } catch {
+    // No storage: completing will say it was started elsewhere.
+  }
 }
 
-/** Activates the grant Google's redirect parked — only for the user who started it. */
+function takeBrowserKey(): string | null {
+  try {
+    const key = localStorage.getItem(BROWSER_KEY)
+    localStorage.removeItem(BROWSER_KEY)
+    return key
+  } catch {
+    return null
+  }
+}
+
+/** Google's consent page for this user (the function stores the one-time state). */
+export async function startGmailConnection(): Promise<{ url: string }> {
+  const { url, browserKey } = await invoke<{ url: string; browserKey: string }>({ action: 'start' })
+  rememberBrowserKey(browserKey)
+  return { url }
+}
+
+/** Activates the grant Google's redirect parked — only for the user and browser that started it. */
 export function completeGmailConnection(ticket: string): Promise<{ connection: { id: string; accountEmail: string; status: 'active' } }> {
-  return invoke({ action: 'complete', ticket })
+  return invoke({ action: 'complete', ticket, browserKey: takeBrowserKey() })
 }
 
 /** Deletes Friday's stored Gmail access and revokes it with Google. */
@@ -118,5 +143,6 @@ export const CALLBACK_ERRORS: Record<string, string> = {
 }
 
 export function callbackErrorMessage(code: string): string {
-  return CALLBACK_ERRORS[code] ?? CALLBACK_ERRORS.google_error
+  // Own keys only: the code comes from the address bar (e.g. ?gmail_error=__proto__).
+  return Object.prototype.hasOwnProperty.call(CALLBACK_ERRORS, code) ? CALLBACK_ERRORS[code] : CALLBACK_ERRORS.google_error
 }

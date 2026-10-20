@@ -130,7 +130,7 @@ test('connect Gmail read-only, preview alerts, record nothing', async ({ page })
   await page.screenshot({ path: 'test-results/gmail-connected.png', fullPage: true })
 })
 
-test('an approval started from another Friday account is refused and revoked', async ({ page }) => {
+test('an approval started from another Friday account is refused, and Asha stays connected', async ({ page }) => {
   // Bea starts connecting and sends the Google link to Asha.
   await signIn(page, bea)
   await toGoogle(page)
@@ -148,15 +148,18 @@ test('an approval started from another Friday account is refused and revoked', a
   await expect(page).toHaveURL('http://localhost:5174/connections/gmail')
   await expect(page.getByRole('alert')).toContainText('started from a different Friday account')
 
-  // Nobody gained anything: Bea isn't connected, Asha's connection is unchanged,
-  // and the token Google issued for this approval was revoked.
+  // Nobody gained anything: Bea isn't connected, the parked grant is gone, and
+  // Asha's connection is unchanged and still works — the refused token was
+  // dropped, not revoked, because revoking would end Asha's access too.
   expect(psql(`select count(*) from public.source_connections where user_id = '${userId(bea.email)}'`)).toBe('0')
   expect(psql(`select count(*) from friday_private.gmail_pending_grants`)).toBe('0')
   expect(psql(`select refresh_token_enc from friday_private.gmail_credentials where user_id = '${userId(asha.email)}'`)).toBe(ashaSealed)
   const google = await issuedByGoogle()
   expect(google.refreshTokens.length).toBe(before + 1)
-  expect(google.revoked).toContain(google.refreshTokens.at(-1))
+  expect(google.revoked).toEqual([])
   await expect(page.getByRole('heading', { name: 'asha@gmail.com' })).toBeVisible()
+  await page.getByRole('button', { name: 'Preview recent alerts' }).click()
+  await expect(page.getByRole('region', { name: 'Recent alerts' }).getByText('Rs.250.00 debited from a/c **1234')).toBeVisible()
 })
 
 test('disconnecting deletes the stored access and revokes it with Google', async ({ page }) => {
@@ -173,7 +176,7 @@ test('disconnecting deletes the stored access and revokes it with Google', async
   expect(psql(`select count(*) from friday_private.gmail_oauth_states where user_id = '${uid}'`)).toBe('0')
   expect(psql(`select status from public.source_connections where user_id = '${uid}'`)).toBe('disconnected')
   const google = await issuedByGoogle()
-  // Every refresh token Asha's connection ever held is revoked.
+  // Google ends the whole grant for asha@gmail.com: every token ever issued for it.
   expect(google.refreshTokens.filter((t) => !google.revoked.includes(t))).toEqual([])
 
   await page.goto('/profile')

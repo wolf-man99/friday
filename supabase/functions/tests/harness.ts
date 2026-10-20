@@ -41,12 +41,14 @@ export async function setup(options: { log?: Logger; config?: Partial<GmailConfi
   /** start → Google consent → callback. Returns where the browser ends up. */
   async function authorize(session: string, consent: ConsentOptions = {}) {
     const started = await call(session, { action: 'start' })
-    const { url } = await started.json()
+    const { url, browserKey } = await started.json()
     const back = await google.consent(url, consent)
     const redirected = await callback(back)
     const location = new URL(redirected.headers.get('location')!)
     return {
       authorizationUrl: url as string,
+      /** What the app keeps in this browser between start and complete. */
+      browserKey: browserKey as string,
       callbackUrl: back,
       redirected,
       location,
@@ -55,11 +57,11 @@ export async function setup(options: { log?: Logger; config?: Partial<GmailConfi
     }
   }
 
-  /** The whole connection flow for a signed-in user. */
+  /** The whole connection flow for a signed-in user, in one browser. */
   async function connect(session: string, consent: ConsentOptions = {}) {
-    const { ticket } = await authorize(session, consent)
-    const completed = await call(session, { action: 'complete', ticket })
-    return { ticket, completed, body: await completed.json() }
+    const { ticket, browserKey } = await authorize(session, consent)
+    const completed = await call(session, { action: 'complete', ticket, browserKey })
+    return { ticket, browserKey, completed, body: await completed.json() }
   }
 
   return { store, google, cipher: tokenCipher, lines: captured.lines, call, callback, authorize, connect }

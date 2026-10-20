@@ -90,6 +90,10 @@ Deno.test('sender check: exact address, the domain or its subdomains — nothing
   assert.equal(senderAllowed('x <alerts@hdfcbank.net.evil.com>', rules), false)
   assert.equal(senderAllowed('x <alerts@nothdfcbank.net>', rules), false)
   assert.equal(senderAllowed('alerts@hdfcbank.net <phish@evil.com>', rules), false, 'the address in <> wins over the display name')
+  assert.equal(senderAllowed('"<alerts@hdfcbank.net>" <phish@evil.com>', rules), false, 'a bracketed address in the display name is ignored')
+  assert.equal(senderAddress('"HDFC <alerts@hdfcbank.net>" <phish@evil.com>'), 'phish@evil.com')
+  assert.equal(senderAllowed('alerts@hdfcbank.net', rules), true, 'a bare address')
+  assert.equal(senderAllowed('alerts@hdfcbank.net phish@evil.com', rules), false, 'not one address')
   assert.equal(senderAllowed('', rules), false)
 })
 

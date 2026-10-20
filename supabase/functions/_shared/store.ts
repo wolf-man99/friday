@@ -17,15 +17,15 @@ export class StoreError extends Error {
 }
 
 export type ConsumeOutcome = 'ok' | 'expired' | 'used' | 'unknown'
-export type CompleteOutcome = 'ok' | 'wrong_user' | 'expired' | 'unknown'
+export type CompleteOutcome = 'ok' | 'wrong_user' | 'wrong_browser' | 'expired' | 'unknown'
 
 export interface CompleteResult {
   outcome: CompleteOutcome
   connectionId: string | null
   accountEmail: string | null
-  /** For outcomes other than ok: the grant's token, to revoke. */
+  /** For outcomes other than ok: the grant's token, when it's safe to revoke. */
   refreshTokenEnc: string | null
-  /** For ok: a credential this replaced, to revoke. */
+  /** For ok: a credential for another Gmail account this replaced, when it's safe to revoke. */
   replacedTokenEnc: string | null
   /** Whose token refreshTokenEnc is (needed to decrypt it for revocation). */
   ownerId: string | null
@@ -37,16 +37,40 @@ export interface Credentials {
   refreshTokenEnc: string
 }
 
+export interface ConsumedState {
+  outcome: ConsumeOutcome
+  userId: string | null
+  codeVerifier: string | null
+  browserHash: string | null
+}
+
+export interface PendingGrant {
+  userId: string
+  ticketHash: string
+  accountEmail: string
+  scopes: string[]
+  refreshTokenEnc: string
+  browserHash: string
+}
+
+/** A token disconnect deleted; revocable is false when another live connection uses that Gmail account. */
+export interface DeletedToken {
+  refreshTokenEnc: string
+  revocable: boolean
+}
+
 export interface GmailStore {
-  begin(userId: string, stateHash: string, codeVerifier: string): Promise<void>
-  consume(stateHash: string): Promise<{ outcome: ConsumeOutcome; userId: string | null; codeVerifier: string | null }>
-  storePendingGrant(input: { userId: string; ticketHash: string; accountEmail: string; scopes: string[]; refreshTokenEnc: string }): Promise<void>
+  begin(userId: string, stateHash: string, codeVerifier: string, browserHash: string): Promise<void>
+  consume(stateHash: string): Promise<ConsumedState>
+  storePendingGrant(grant: PendingGrant): Promise<void>
+  /** Deletes the user's expired grants; returns the tokens that are safe to revoke. */
   takeExpiredGrants(userId: string): Promise<string[]>
-  completeGrant(userId: string, ticketHash: string): Promise<CompleteResult>
+  completeGrant(userId: string, ticketHash: string, browserHash: string): Promise<CompleteResult>
   getCredentials(userId: string): Promise<Credentials | null>
-  markNeedsReconnect(userId: string, connectionId: string, errorCode: string): Promise<void>
+  /** Deletes exactly this credential (not a newer one) and asks the person to reconnect. */
+  markNeedsReconnect(userId: string, connectionId: string, refreshTokenEnc: string, errorCode: string): Promise<void>
   recordCheck(userId: string, connectionId: string): Promise<void>
-  disconnect(userId: string): Promise<string[]>
+  disconnect(userId: string): Promise<DeletedToken[]>
 }
 
 type Row = Record<string, unknown>
@@ -62,8 +86,13 @@ export class SupabaseGmailStore implements GmailStore {
     return Array.isArray(data) ? (data as Row[]) : [data as Row]
   }
 
-  async begin(userId: string, stateHash: string, codeVerifier: string) {
-    await this.rows('gmail_oauth_begin', { p_user_id: userId, p_state_hash: stateHash, p_code_verifier: codeVerifier })
+  async begin(userId: string, stateHash: string, codeVerifier: string, browserHash: string) {
+    await this.rows('gmail_oauth_begin', {
+      p_user_id: userId,
+      p_state_hash: stateHash,
+      p_code_verifier: codeVerifier,
+      p_browser_hash: browserHash,
+    })
   }
 
   async consume(stateHash: string) {
@@ -72,16 +101,18 @@ export class SupabaseGmailStore implements GmailStore {
       outcome: (row?.outcome as ConsumeOutcome) ?? 'unknown',
       userId: (row?.user_id as string | null) ?? null,
       codeVerifier: (row?.code_verifier as string | null) ?? null,
+      browserHash: (row?.browser_hash as string | null) ?? null,
     }
   }
 
-  async storePendingGrant(input: { userId: string; ticketHash: string; accountEmail: string; scopes: string[]; refreshTokenEnc: string }) {
+  async storePendingGrant(grant: PendingGrant) {
     await this.rows('gmail_store_pending_grant', {
-      p_user_id: input.userId,
-      p_ticket_hash: input.ticketHash,
-      p_account_email: input.accountEmail,
-      p_scopes: input.scopes,
-      p_refresh_token_enc: input.refreshTokenEnc,
+      p_user_id: grant.userId,
+      p_ticket_hash: grant.ticketHash,
+      p_account_email: grant.accountEmail,
+      p_scopes: grant.scopes,
+      p_refresh_token_enc: grant.refreshTokenEnc,
+      p_browser_hash: grant.browserHash,
     })
   }
 
@@ -90,8 +121,8 @@ export class SupabaseGmailStore implements GmailStore {
     return rows.map((row) => String(row.refresh_token_enc))
   }
 
-  async completeGrant(userId: string, ticketHash: string): Promise<CompleteResult> {
-    const [row] = await this.rows('gmail_complete_grant', { p_user_id: userId, p_ticket_hash: ticketHash })
+  async completeGrant(userId: string, ticketHash: string, browserHash: string): Promise<CompleteResult> {
+    const [row] = await this.rows('gmail_complete_grant', { p_user_id: userId, p_ticket_hash: ticketHash, p_browser_hash: browserHash })
     return {
       outcome: (row?.outcome as CompleteOutcome) ?? 'unknown',
       connectionId: (row?.connection_id as string | null) ?? null,
@@ -112,8 +143,13 @@ export class SupabaseGmailStore implements GmailStore {
     }
   }
 
-  async markNeedsReconnect(userId: string, connectionId: string, errorCode: string) {
-    await this.rows('gmail_mark_needs_reconnect', { p_user_id: userId, p_connection_id: connectionId, p_error_code: errorCode })
+  async markNeedsReconnect(userId: string, connectionId: string, refreshTokenEnc: string, errorCode: string) {
+    await this.rows('gmail_mark_needs_reconnect', {
+      p_user_id: userId,
+      p_connection_id: connectionId,
+      p_refresh_token_enc: refreshTokenEnc,
+      p_error_code: errorCode,
+    })
   }
 
   async recordCheck(userId: string, connectionId: string) {
@@ -122,6 +158,6 @@ export class SupabaseGmailStore implements GmailStore {
 
   async disconnect(userId: string) {
     const rows = await this.rows('gmail_disconnect', { p_user_id: userId })
-    return rows.map((row) => String(row.refresh_token_enc))
+    return rows.map((row) => ({ refreshTokenEnc: String(row.refresh_token_enc), revocable: row.revocable === true }))
   }
 }

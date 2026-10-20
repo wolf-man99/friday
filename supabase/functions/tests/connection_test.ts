@@ -64,7 +64,7 @@ Deno.test('start: authorization-code flow for Gmail read-only, offline, with PKC
   const h = await setup()
   const response = await h.call('session-a', { action: 'start' })
   assert.equal(response.status, 200)
-  const { url } = await response.json()
+  const { url, browserKey } = await response.json()
   const auth = new URL(url)
   const p = auth.searchParams
 
@@ -84,6 +84,8 @@ Deno.test('start: authorization-code flow for Gmail read-only, offline, with PKC
   const stored = h.store.states.get(await sha256Hex(state))
   assert.ok(stored, 'stored by hash only')
   assert.equal(stored.userId, USERS.a, 'bound to the signed-in user')
+  assert.match(browserKey, /^[A-Za-z0-9_-]{43}$/)
+  assert.equal(stored.browserHash, await sha256Hex(browserKey), 'and to this browser, by a key only it holds')
   assert.equal(await pkceChallenge(stored.verifier), p.get('code_challenge'))
   assert.ok(!url.includes(stored.verifier), 'the PKCE verifier stays on the server')
 })
@@ -140,7 +142,8 @@ Deno.test('cross-user: a ticket can’t be completed by a different Friday user 
   const [grant] = [...h.store.grants.values()]
   const refresh = await h.cipher.decrypt(grant.enc, refreshTokenContext(USERS.b))
 
-  // Asha's app, signed in as Asha, completes it: refused, destroyed and revoked.
+  // Asha's app, signed in as Asha, completes it: refused, destroyed and
+  // (as Asha has no Friday connection to that Gmail) revoked.
   const response = await h.call('session-a', { action: 'complete', ticket })
   assert.equal(response.status, 403)
   assert.equal((await response.json()).error, 'wrong_user')
@@ -152,17 +155,47 @@ Deno.test('cross-user: a ticket can’t be completed by a different Friday user 
   assert.equal((await h.call('session-b', { action: 'complete', ticket })).status, 404)
 })
 
+Deno.test('cross-user: a lure approved by someone already connected doesn’t break their connection', async () => {
+  // Asha has her Gmail connected. Bea's lure gets Asha to approve again: the
+  // refusal must not revoke (Google would end Asha's working access too).
+  const h = await connected('asha@gmail.com', 'session-a')
+  h.google.mailboxes.set('asha@gmail.com', alerts(1))
+  const { ticket, browserKey } = await h.authorize('session-b', { email: 'asha@gmail.com' })
+  const response = await h.call('session-a', { action: 'complete', ticket, browserKey })
+  assert.equal((await response.json()).error, 'wrong_user')
+  assert.equal(h.google.revoked.size, 0)
+  assert.equal((await h.call('session-a', { action: 'test-fetch' })).status, 200, 'Asha is still connected')
+})
+
+Deno.test('same user, different browser: refused (a link someone sent you can’t be attached)', async () => {
+  const h = await setup()
+  const { ticket } = await h.authorize('session-a')
+  const other = await h.call('session-a', { action: 'complete', ticket, browserKey: 'k'.repeat(43) })
+  assert.equal(other.status, 403)
+  assert.equal((await other.json()).error, 'wrong_browser')
+  assert.equal(h.store.connections.length, 0)
+  assert.equal(h.store.grants.size, 0, 'the grant is gone')
+  assert.ok(h.google.revoked.size > 0, 'and revoked (no connection depends on that Gmail)')
+})
+
+Deno.test('a ticket without the browser key is used up as a mismatch', async () => {
+  const h = await setup()
+  const { ticket } = await h.authorize('session-a')
+  assert.equal((await h.call('session-a', { action: 'complete', ticket })).status, 403)
+  assert.equal(h.store.grants.size, 0)
+})
+
 Deno.test('complete: a ticket works once', async () => {
   const h = await setup()
-  const { ticket } = await h.connect('session-a')
-  assert.equal((await h.call('session-a', { action: 'complete', ticket })).status, 404)
+  const { ticket, browserKey } = await h.connect('session-a')
+  assert.equal((await h.call('session-a', { action: 'complete', ticket, browserKey })).status, 404)
 })
 
 Deno.test('complete: an expired ticket is refused and its token revoked', async () => {
   const h = await setup()
-  const { ticket } = await h.authorize('session-a')
+  const { ticket, browserKey } = await h.authorize('session-a')
   h.store.advance(601)
-  const response = await h.call('session-a', { action: 'complete', ticket })
+  const response = await h.call('session-a', { action: 'complete', ticket, browserKey })
   assert.equal(response.status, 410)
   assert.equal(h.store.connections.length, 0)
   assert.equal(h.google.revoked.size, 2)
@@ -175,15 +208,34 @@ Deno.test('complete: malformed tickets are refused before any lookup', async () 
   }
 })
 
-Deno.test('reconnecting the same Gmail replaces the credential and revokes the old one', async () => {
+Deno.test('reconnecting the same Gmail replaces the credential and keeps working', async () => {
   const h = await connected()
   const old = await h.cipher.decrypt(h.store.credentials.get('conn-1')!.enc, refreshTokenContext(USERS.a))
   const { body } = await h.connect('session-a', { email: 'asha@gmail.com' })
   assert.equal(body.connection.id, 'conn-1')
-  assert.ok(h.google.revoked.has(old))
   const current = await h.cipher.decrypt(h.store.credentials.get('conn-1')!.enc, refreshTokenContext(USERS.a))
-  assert.notEqual(current, old)
-  assert.ok(!h.google.revoked.has(current))
+  assert.notEqual(current, old, 'only the new token is stored')
+  // Revoking the old one would end the new one too (Google revokes per account).
+  assert.equal(h.google.revoked.size, 0)
+  assert.equal((await h.call('session-a', { action: 'test-fetch' })).status, 200)
+})
+
+Deno.test('switching to a different Gmail account revokes the old account’s access', async () => {
+  const h = await connected('asha@gmail.com')
+  const old = await h.cipher.decrypt(h.store.credentials.get('conn-1')!.enc, refreshTokenContext(USERS.a))
+  const { body } = await h.connect('session-a', { email: 'asha.work@gmail.com' })
+  assert.equal(body.connection.accountEmail, 'asha.work@gmail.com')
+  assert.ok(h.google.revoked.has(old))
+  assert.equal((await h.call('session-a', { action: 'test-fetch' })).status, 200, 'the new account works')
+})
+
+Deno.test('two Friday accounts sharing one Gmail: one disconnecting leaves the other working', async () => {
+  const h = await connected('family@gmail.com', 'session-a')
+  await h.connect('session-b', { email: 'family@gmail.com' })
+  const body = await (await h.call('session-a', { action: 'disconnect' })).json()
+  assert.deepEqual(body, { disconnected: true, revoked: false, removed: 1 }, 'deleted, but not revoked with Google')
+  assert.equal(h.google.revoked.size, 0)
+  assert.equal((await h.call('session-b', { action: 'test-fetch' })).status, 200)
 })
 
 Deno.test('cross-user: each user’s actions touch only their own connection', async () => {
@@ -213,13 +265,22 @@ Deno.test('cross-user: a stored credential copied to another user won’t decryp
   const before = h.google.requests.length
   const response = await h.call('session-b', { action: 'test-fetch' })
   assert.equal(response.status, 409)
-  assert.equal((await response.json()).error, 'needs_reconnect')
+  assert.equal((await response.json()).error, 'credential_unreadable')
   assert.equal(h.google.requests.length, before, 'A’s token was never used: no call to Google at all')
+  // Unreadable isn't the same as revoked: nothing is deleted on a hunch.
+  assert.equal(h.store.credentials.size, 2)
+  assert.equal(h.store.connections[1].status, 'active')
 })
 
-// -----------------------------------------------------------------------------
-// Disconnect and disconnected accounts
-// -----------------------------------------------------------------------------
+Deno.test('a wrong client secret on the server never deletes anyone’s access', async () => {
+  const h = await connected()
+  h.google.failures.set('/token', { status: 401, body: { error: 'invalid_client', error_description: 'The OAuth client was not found.' } })
+  const response = await h.call('session-a', { action: 'test-fetch' })
+  assert.equal(response.status, 503)
+  assert.equal((await response.json()).error, 'not_configured')
+  assert.equal(h.store.connections[0].status, 'active')
+  assert.equal(h.store.credentials.size, 1)
+})
 
 Deno.test('disconnect: deletes credentials and revokes them with Google', async () => {
   const h = await connected()
@@ -232,7 +293,7 @@ Deno.test('disconnect: deletes credentials and revokes them with Google', async 
   assert.ok(h.google.revoked.has(refresh))
 })
 
-Deno.test('disconnect: also revokes a grant waiting for confirmation', async () => {
+Deno.test('disconnect: also deletes (and revokes) a grant waiting for confirmation', async () => {
   const h = await setup()
   await h.authorize('session-a')
   const response = await h.call('session-a', { action: 'disconnect' })

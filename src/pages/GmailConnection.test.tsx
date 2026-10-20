@@ -168,6 +168,11 @@ describe('Gmail connection — coming back from Google', () => {
     renderPage('/connections/gmail?gmail_error=%3Cscript%3E')
     expect(screen.getByRole('alert')).toHaveTextContent('Google reported a problem, so nothing was connected. Try again.')
   })
+
+  it.each(['__proto__', 'constructor', 'toString'])('isn’t broken by a crafted code (%s)', (code) => {
+    renderPage(`/connections/gmail?gmail_error=${code}`)
+    expect(screen.getByRole('alert')).toHaveTextContent('Google reported a problem, so nothing was connected. Try again.')
+  })
 })
 
 describe('Gmail connection — connected', () => {

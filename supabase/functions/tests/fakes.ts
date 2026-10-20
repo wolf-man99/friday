@@ -8,7 +8,15 @@ import { pkceChallenge, TokenCipher } from '../_shared/crypto.ts'
 import { DEFAULT_ALERT_SENDERS } from '../_shared/gmailQuery.ts'
 import { GMAIL_READONLY_SCOPE } from '../_shared/google.ts'
 import type { LogFields, Logger } from '../_shared/http.ts'
-import { StoreError, type CompleteResult, type ConsumeOutcome, type Credentials, type GmailStore } from '../_shared/store.ts'
+import {
+  StoreError,
+  type CompleteResult,
+  type ConsumedState,
+  type Credentials,
+  type DeletedToken,
+  type GmailStore,
+  type PendingGrant,
+} from '../_shared/store.ts'
 
 // Distinctive values, so a leak anywhere is easy to spot.
 export const SECRETS = {
@@ -43,8 +51,8 @@ export function cipher(): Promise<TokenCipher> {
 // Store
 // -----------------------------------------------------------------------------
 
-interface StateRow { userId: string; verifier: string; expiresAt: number; usedAt: number | null }
-interface GrantRow { userId: string; email: string; scopes: string[]; enc: string; expiresAt: number }
+interface StateRow { userId: string; verifier: string; browserHash: string; expiresAt: number; usedAt: number | null }
+interface GrantRow { userId: string; email: string; scopes: string[]; enc: string; browserHash: string; expiresAt: number }
 export interface ConnectionRow {
   id: string
   userId: string
@@ -74,7 +82,12 @@ export class MemoryStore implements GmailStore {
     this.now += seconds * 1000
   }
 
-  begin(userId: string, stateHash: string, codeVerifier: string) {
+  /** As friday_private.gmail_account_live: any user's active connection with a credential. */
+  accountLive(email: string): boolean {
+    return this.connections.some((c) => c.email === email.toLowerCase() && c.status === 'active' && this.credentials.has(c.id))
+  }
+
+  begin(userId: string, stateHash: string, codeVerifier: string, browserHash: string) {
     this.check('begin')
     if (!/^[0-9a-f]{64}$/.test(stateHash)) throw new StoreError('bad hash', '23514')
     if (!/^[A-Za-z0-9._~-]{43,128}$/.test(codeVerifier)) throw new StoreError('bad verifier', '23514')
@@ -82,26 +95,26 @@ export class MemoryStore implements GmailStore {
     if (open.length >= 5) {
       return Promise.reject(new StoreError('Too many Gmail connection attempts in progress. Try again in a few minutes.', 'P0001'))
     }
-    this.states.set(stateHash, { userId, verifier: codeVerifier, expiresAt: this.now + 600_000, usedAt: null })
+    this.states.set(stateHash, { userId, verifier: codeVerifier, browserHash, expiresAt: this.now + 600_000, usedAt: null })
     return Promise.resolve()
   }
 
   consume(stateHash: string) {
     this.check('consume')
     const state = this.states.get(stateHash)
-    let result: { outcome: ConsumeOutcome; userId: string | null; codeVerifier: string | null }
-    if (!state) result = { outcome: 'unknown', userId: null, codeVerifier: null }
-    else if (state.usedAt !== null) result = { outcome: 'used', userId: null, codeVerifier: null }
+    let result: ConsumedState
+    if (!state) result = { outcome: 'unknown', userId: null, codeVerifier: null, browserHash: null }
+    else if (state.usedAt !== null) result = { outcome: 'used', userId: null, codeVerifier: null, browserHash: null }
     else {
       state.usedAt = this.now
       result = state.expiresAt <= this.now
-        ? { outcome: 'expired', userId: state.userId, codeVerifier: null }
-        : { outcome: 'ok', userId: state.userId, codeVerifier: state.verifier }
+        ? { outcome: 'expired', userId: state.userId, codeVerifier: null, browserHash: null }
+        : { outcome: 'ok', userId: state.userId, codeVerifier: state.verifier, browserHash: state.browserHash }
     }
     return Promise.resolve(result)
   }
 
-  storePendingGrant(input: { userId: string; ticketHash: string; accountEmail: string; scopes: string[]; refreshTokenEnc: string }) {
+  storePendingGrant(input: PendingGrant) {
     this.check('storePendingGrant')
     if (!input.refreshTokenEnc.startsWith('v1.')) throw new StoreError('raw token', '23514')
     this.grants.set(input.ticketHash, {
@@ -109,6 +122,7 @@ export class MemoryStore implements GmailStore {
       email: input.accountEmail.toLowerCase(),
       scopes: input.scopes,
       enc: input.refreshTokenEnc,
+      browserHash: input.browserHash,
       expiresAt: this.now + 600_000,
     })
     return Promise.resolve()
@@ -119,35 +133,34 @@ export class MemoryStore implements GmailStore {
     const out: string[] = []
     for (const [hash, grant] of this.grants) {
       if (grant.userId === userId && grant.expiresAt <= this.now) {
-        out.push(grant.enc)
+        if (!this.accountLive(grant.email)) out.push(grant.enc)
         this.grants.delete(hash)
       }
     }
     return Promise.resolve(out)
   }
 
-  completeGrant(userId: string, ticketHash: string): Promise<CompleteResult> {
+  completeGrant(userId: string, ticketHash: string, browserHash: string): Promise<CompleteResult> {
     this.check('completeGrant')
     const none = { connectionId: null, accountEmail: null, refreshTokenEnc: null, replacedTokenEnc: null, ownerId: null }
     const grant = this.grants.get(ticketHash)
     if (!grant) return Promise.resolve({ outcome: 'unknown', ...none })
     this.grants.delete(ticketHash)
-    if (grant.userId !== userId) {
-      return Promise.resolve({ outcome: 'wrong_user', ...none, refreshTokenEnc: grant.enc, ownerId: grant.userId })
-    }
-    if (grant.expiresAt <= this.now) {
-      return Promise.resolve({ outcome: 'expired', ...none, refreshTokenEnc: grant.enc, ownerId: grant.userId })
-    }
+    const rejected = { ...none, refreshTokenEnc: this.accountLive(grant.email) ? null : grant.enc, ownerId: grant.userId }
+    if (grant.userId !== userId) return Promise.resolve({ outcome: 'wrong_user', ...rejected })
+    if (grant.expiresAt <= this.now) return Promise.resolve({ outcome: 'expired', ...rejected })
+    if (grant.browserHash !== browserHash) return Promise.resolve({ outcome: 'wrong_browser', ...rejected })
     let replaced: string | null = null
     let live = this.connections.find((c) => c.userId === userId && c.status !== 'disconnected')
     if (live && live.email !== grant.email) {
       replaced = this.credentials.get(live.id)?.enc ?? null
       this.credentials.delete(live.id)
       live.status = 'disconnected'
+      if (this.accountLive(live.email)) replaced = null
       live = undefined
     }
     if (live) {
-      replaced = this.credentials.get(live.id)?.enc ?? null
+      // Same Gmail account: overwrite, never hand back the old token.
       live.status = 'active'
       live.lastErrorCode = null
     } else {
@@ -176,10 +189,12 @@ export class MemoryStore implements GmailStore {
     )
   }
 
-  markNeedsReconnect(userId: string, connectionId: string, errorCode: string) {
+  markNeedsReconnect(userId: string, connectionId: string, refreshTokenEnc: string, errorCode: string) {
     this.check('markNeedsReconnect')
+    const credential = this.credentials.get(connectionId)
+    if (!credential || credential.userId !== userId || credential.enc !== refreshTokenEnc) return Promise.resolve()
+    this.credentials.delete(connectionId)
     const connection = this.connections.find((c) => c.id === connectionId && c.userId === userId && c.status !== 'disconnected')
-    if (this.credentials.get(connectionId)?.userId === userId) this.credentials.delete(connectionId)
     if (connection) {
       connection.status = 'needs_reconnect'
       connection.lastErrorCode = errorCode
@@ -199,22 +214,23 @@ export class MemoryStore implements GmailStore {
 
   disconnect(userId: string) {
     this.check('disconnect')
-    const out: string[] = []
+    const gone: { enc: string; email: string }[] = []
     for (const connection of this.connections) {
       if (connection.userId === userId && connection.status !== 'disconnected') connection.status = 'disconnected'
     }
     for (const [id, credential] of this.credentials) {
       if (credential.userId === userId) {
-        out.push(credential.enc)
+        gone.push({ enc: credential.enc, email: this.connections.find((c) => c.id === id)!.email })
         this.credentials.delete(id)
       }
     }
     for (const [hash, grant] of this.grants) {
       if (grant.userId === userId) {
-        out.push(grant.enc)
+        gone.push({ enc: grant.enc, email: grant.email })
         this.grants.delete(hash)
       }
     }
+    const out: DeletedToken[] = gone.map(({ enc, email }) => ({ refreshTokenEnc: enc, revocable: !this.accountLive(email) }))
     for (const [hash, state] of this.states) if (state.userId === userId) this.states.delete(hash)
     return Promise.resolve(out)
   }
@@ -329,10 +345,10 @@ export class FakeGoogle {
     if (url.origin === 'https://oauth2.googleapis.com' && url.pathname === '/revoke') {
       const token = body?.get('token') ?? ''
       if (!this.refreshTokens.has(token) && !this.accessTokens.has(token)) return Response.json({ error: 'invalid_token' }, { status: 400 })
-      this.revoked.add(token)
-      // Revoking a refresh token also ends the access tokens issued from it.
-      const owner = this.refreshTokens.get(token)
-      for (const [access, mailbox] of this.accessTokens) if (mailbox === owner) this.revoked.add(access)
+      // Like Google: revoking any token ends the app's whole grant for that
+      // account — every refresh and access token issued so far.
+      const owner = this.refreshTokens.get(token) ?? this.accessTokens.get(token)
+      for (const [issued, mailbox] of [...this.refreshTokens, ...this.accessTokens]) if (mailbox === owner) this.revoked.add(issued)
       return new Response(null, { status: 200 })
     }
     if (url.origin === 'https://gmail.googleapis.com') return this.gmail(url, headers.get('authorization'))

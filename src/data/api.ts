@@ -88,6 +88,12 @@ export async function updateAccount(id: string, patch: Partial<AccountInsert>): 
   return unwrap(await supabase.from('accounts').update(patch).eq('id', id).select().single())
 }
 
+/** Deletes an account for good, with every entry and transfer recorded on it. */
+export async function deleteAccount(id: string): Promise<{ removed_entries: number; removed_transfers: number }> {
+  const rows = unwrap(await supabase.rpc('delete_account', { p_account_id: id })) as { removed_entries: number; removed_transfers: number }[]
+  return rows[0] ?? { removed_entries: 0, removed_transfers: 0 }
+}
+
 // --- Categories ---------------------------------------------------------------
 
 export async function fetchCategories(): Promise<CategoryRow[]> {

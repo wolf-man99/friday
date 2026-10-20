@@ -357,6 +357,15 @@ export function useSaveAccount() {
   })
 }
 
+/** Deletes an account and everything on it; every screen is re-read afterwards. */
+export function useDeleteAccount() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.deleteAccount(id),
+    onSuccess: () => client.invalidateQueries(),
+  })
+}
+
 export function useSaveCategory() {
   const invalidate = useInvalidate()
   return useMutation({

@@ -69,6 +69,7 @@ order**:
 | `20261021000000_gmail_connection.sql` | Gmail connection foundation: connection metadata on `source_connections`, a private schema for OAuth state and encrypted tokens, and server-only functions. Additive and safe to re-run. Only needed if you'll connect Gmail. |
 | `20261022000000_gmail_import.sql` | Importing past months from Gmail: import jobs, remembered account links, balances that stay exact when older history arrives (`balance_from`), and server-only import steps. Additive and safe to re-run. |
 | `20261023000000_gmail_import_review_all.sql` | Gmail import: emails that can't be read completely go to Review instead of being dropped; honest counts of what was left out and why. Run after 0005. Additive and safe to re-run. |
+| `20261024000000_delete_account.sql` | Delete an account for good, with everything recorded on it (Accounts → an account → Delete account). Additive and safe to re-run. |
 
 **These are the only files to run in Supabase.** The SQL under `tests/db/` is for
 local testing; it creates fake users and refuses to run in a Supabase project.

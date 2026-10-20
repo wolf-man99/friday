@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, ChevronRight, Inbox, ListOrdered, Plus, Star } from 'lucide-react'
+import { Archive, ArchiveRestore, Check, ChevronRight, Inbox, ListOrdered, Plus, Star, Trash2 } from 'lucide-react'
 import { useId, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { useSettings } from '@/app/settings'
@@ -14,7 +14,7 @@ import { EmptyState, InlineError } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
 import { TONE_BG, TONE_LABEL, TONES, toneOf, type AccentTone } from '@/components/ui/tones'
 import type { AccountBalanceRow, AccountType } from '@/data/database.types'
-import { useSaveAccount, useUpdateProfile } from '@/data/hooks'
+import { useDeleteAccount, useSaveAccount, useUpdateProfile } from '@/data/hooks'
 import { breakdownRows, describeCredit } from '@/features/accounts/figures'
 import { accountFormText, accountValues, INSTITUTION_MAX_LENGTH, type AccountFormErrors } from '@/features/accounts/form'
 import { formatDate } from '@/lib/dates'
@@ -399,9 +399,11 @@ export function AccountEditor() {
   const save = useSaveAccount()
   const updateProfile = useUpdateProfile()
   const [confirmArchive, setConfirmArchive] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const remove = useDeleteAccount()
   const account = id ? accountsById.get(id) : undefined
 
-  if (id && !account) {
+  if (id && !account && !remove.isSuccess) {
     return (
       <div>
         <PageHeader title="Account" back="/accounts" />
@@ -423,6 +425,20 @@ export function AccountEditor() {
       toast({ message: archiving ? `${account.name} archived` : `${account.name} is active again` })
     } catch (error) {
       setConfirmArchive(false)
+      toast({ message: friendlyError(error), tone: 'error' })
+    }
+  }
+
+  async function deleteForGood() {
+    if (!account) return
+    try {
+      const { removed_entries, removed_transfers } = await remove.mutateAsync(account.id)
+      const removed = removed_entries + removed_transfers
+      setConfirmDelete(false)
+      toast({ message: `${account.name} deleted${removed > 0 ? ` with ${removed} ${removed === 1 ? 'entry' : 'entries'}` : ''}` })
+      navigate('/accounts', { replace: true })
+    } catch (error) {
+      setConfirmDelete(false)
       toast({ message: friendlyError(error), tone: 'error' })
     }
   }
@@ -470,11 +486,27 @@ export function AccountEditor() {
           </Button>
           <p className="text-center text-sm text-muted">
             {account.status === 'active'
-              ? 'Archiving keeps every entry and its history. Friday never deletes an account.'
+              ? 'Archiving keeps every entry and its history.'
               : 'Archived: kept with its history, not in your totals, and closed to new entries.'}
           </p>
+          <Button variant="danger" icon={<Trash2 className="size-5" strokeWidth={2.5} />} onClick={() => setConfirmDelete(true)}>
+            Delete account
+          </Button>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete this account?"
+        body="This deletes the account for good, with every income, expense and transfer recorded on it — transfers also leave the other account’s balance. It can’t be undone. To keep its history instead, archive it."
+        confirmLabel="Delete for good"
+        danger
+        busy={remove.isPending}
+        onCancel={() => {
+          if (!remove.isPending) setConfirmDelete(false)
+        }}
+        onConfirm={() => void deleteForGood()}
+      />
 
       <ConfirmDialog
         open={confirmArchive}

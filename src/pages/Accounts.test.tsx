@@ -67,12 +67,14 @@ function makeSettings(accounts: AccountBalanceRow[] = ACCOUNTS) {
 
 let settings = makeSettings()
 const saveAccount = vi.fn()
+const deleteAccount = vi.fn()
 const updateProfile = vi.fn()
 
 vi.mock('@/app/settings', () => ({ useSettings: () => settings }))
 vi.mock('@/data/hooks', () => ({
   useSaveAccount: () => ({ mutateAsync: saveAccount, isPending: false }),
   useUpdateProfile: () => ({ mutateAsync: updateProfile, isPending: false }),
+  useDeleteAccount: () => ({ mutateAsync: deleteAccount, isPending: false, isSuccess: false }),
 }))
 
 function renderAt(path: string) {
@@ -93,6 +95,7 @@ function renderAt(path: string) {
 beforeEach(() => {
   settings = makeSettings()
   saveAccount.mockReset()
+  deleteAccount.mockReset()
   saveAccount.mockResolvedValue({ id: 'new-id' })
   updateProfile.mockReset()
 })
@@ -303,10 +306,20 @@ describe('Account editor', () => {
     expect(screen.getByText(/No credit limit set/)).toBeInTheDocument()
   })
 
-  it('archives instead of deleting', async () => {
+  it('deletes an account only after a clear warning', async () => {
+    deleteAccount.mockResolvedValue({ removed_entries: 3, removed_transfers: 1 })
+    renderAt('/accounts/bank')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    const dialog = screen.getByRole('dialog', { name: 'Delete this account?' })
+    expect(within(dialog).getByText(/can’t be undone/)).toBeInTheDocument()
+    expect(deleteAccount).not.toHaveBeenCalled()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete for good' }))
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalledWith('bank'))
+  })
+
+  it('can still archive instead, keeping the history', async () => {
     saveAccount.mockResolvedValue({ id: 'bank' })
     renderAt('/accounts/bank')
-    expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Archive account' }))
     await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Archive' }))
     await waitFor(() => expect(saveAccount).toHaveBeenCalledWith({ id: 'bank', values: { status: 'archived' } }))

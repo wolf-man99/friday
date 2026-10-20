@@ -538,6 +538,10 @@ export type Database = {
       ignore_source_event: { Args: { p_event_id: string }; Returns: undefined }
       skip_recurring_occurrence: { Args: { p_rule_id: string; p_due_date: string }; Returns: undefined }
       delete_all_my_data: { Args: Record<string, never>; Returns: undefined }
+      delete_account: {
+        Args: { p_account_id: string }
+        Returns: { removed_entries: number; removed_transfers: number }[]
+      }
     }
     Enums: Record<string, never>
     CompositeTypes: Record<string, never>

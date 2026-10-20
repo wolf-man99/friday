@@ -30,6 +30,26 @@ export function monthsLabel(months: string[]): string {
 
 export const IMPORT_RUNNING: GmailImportJobRow['status'][] = ['listing', 'scanning', 'confirm_accounts', 'importing']
 
+const SKIP_LABELS: Record<string, string> = {
+  otp: 'OTPs',
+  statement: 'Statements and bill reminders',
+  promotion: 'Offers and promotions',
+  not_a_transaction: 'Account notices (logins, KYC, mandates…)',
+  no_amount: 'Other emails with no amount',
+  unknown_sender: 'Not from a bank’s own address',
+}
+
+/** What was left out of an import and why, largest first, in words. */
+export function leftOut(job: Pick<GmailImportJobRow, 'skip_reasons' | 'declined' | 'ignored'>): { label: string; count: number }[] {
+  const rows = Object.entries(job.skip_reasons ?? {})
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => ({ label: SKIP_LABELS[reason] ?? 'Other emails that aren’t transactions', count }))
+    .sort((a, b) => b.count - a.count)
+  if (job.declined > 0) rows.push({ label: 'Declined or failed payments (no money moved)', count: job.declined })
+  if (job.ignored > 0) rows.push({ label: 'From accounts you chose to ignore', count: job.ignored })
+  return rows
+}
+
 export type ChoiceKind = 'link' | 'create' | 'ignore' | 'review'
 
 export interface Choice {

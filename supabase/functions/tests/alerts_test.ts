@@ -285,3 +285,68 @@ Deno.test('institutionFor: subdomains count, look-alikes don\'t', () => {
 Deno.test('every recognised institution is searched for', () => {
   for (const domain of INSTITUTION_DOMAINS) assert.ok(DEFAULT_ALERT_SENDERS.includes(domain), domain)
 })
+
+// -----------------------------------------------------------------------------
+// Every transaction is recorded or reviewed, never dropped
+// -----------------------------------------------------------------------------
+
+Deno.test('banks\' new .bank.in addresses are the same banks', () => {
+  const alert = parsed(email('HDFC Bank InstaAlerts <alerts@hdfcbank.bank.in>', 'You have done a UPI txn',
+    'Dear Customer, Rs.250.00 has been debited from account **1234 to VPA x@ybl SHOP on 18-10-26.'))
+  expectFields(alert, { institutionKey: 'hdfc', accountMask: '1234', amountMinor: 25000, senderVerified: true })
+  assert.equal(institutionFor('x <alerts@mail.icicibank.bank.in>')?.key, 'icici')
+  assert.equal(institutionFor('x <alerts@axisbank.bank.in>')?.key, 'axis', 'matched by its old name')
+  assert.equal(institutionFor('x <alerts@sbi.bank.in>')?.key, 'sbi')
+  // A bank Friday doesn't list by name is still a bank, named as it signs.
+  assert.deepEqual(institutionFor('"Saraswat Bank" <alerts@saraswat.bank.in>'), { key: 'saraswat', name: 'Saraswat Bank' })
+  assert.deepEqual(institutionFor('<alerts@cosmos-coop.bank.in>'), { key: 'cosmos_coop', name: 'cosmos-coop.bank.in' })
+  // Look-alikes aren't banks.
+  for (const from of ['x <a@bank.in.evil.example>', 'x <a@hdfcbank-bank.in>', 'x <a@bank.in>', 'x <a@mybank.in>']) {
+    assert.equal(institutionFor(from), null, from)
+  }
+  for (const domain of ['bank.in', 'fin.in', 'hdfcbank.bank.in']) assert.ok(DEFAULT_ALERT_SENDERS.includes(domain), domain)
+})
+
+Deno.test('an amount with no clear debit or credit goes to review, not dropped', () => {
+  const alert = parsed(email(HDFC, 'Transaction alert', 'Dear Customer, Rs.1,250.00 at DMART on card xx1234 on 18-10-26.'))
+  expectFields(alert, { kind: null, amountMinor: 125000, accountMask: '1234', merchant: 'DMART', dateSource: 'text' })
+  assert.ok(alert.confidence < 0.9)
+})
+
+Deno.test('a debit with no amount Friday can read goes to review for the amount', () => {
+  const alert = parsed(email(HDFC, 'Account update', 'Dear Customer, your A/c XX1234 has been debited. Visit NetBanking for details.'))
+  expectFields(alert, { kind: 'expense', amountMinor: null, accountMask: '1234' })
+  assert.ok(alert.confidence < 0.9)
+})
+
+Deno.test('offers are left out, including ones Gmail files under Promotions', () => {
+  const skip = (raw: RawEmail) => {
+    const result = parseAlert(raw, IST)
+    return result.ok ? 'parsed' : result.skip
+  }
+  assert.equal(skip(email(HDFC, 'Festive season is here', 'Shop electronics on EMI and pay just ₹1,999 a month.', { labels: ['CATEGORY_PROMOTIONS'] })), 'promotion')
+  assert.equal(skip(email(HDFC, 'Big savings', 'Get cashback up to ₹500 on your next bill payment.')), 'no_amount')
+  // A real transaction filed under Promotions is still read, just less certainly.
+  const alert = parsed(email(HDFC, 'Alert', 'Rs.250.00 has been debited from account **1234 to VPA x@ybl SHOP on 18-10-26.', { labels: ['CATEGORY_PROMOTIONS'] }))
+  expectFields(alert, { kind: 'expense', amountMinor: 25000 })
+  assert.ok(alert.confidence <= 0.6)
+})
+
+Deno.test('a failure mentioned further down only makes it less certain', () => {
+  const alert = parsed(email(HDFC, 'You have done a UPI txn',
+    'Dear Customer, Rs.250.00 has been debited from account **1234 to VPA x@ybl SHOP on 18-10-26. In case the transaction failed, the amount will be refunded within 5 working days.'))
+  expectFields(alert, { entryStatus: 'posted', kind: 'expense', amountMinor: 25000 })
+  assert.ok(alert.confidence <= 0.6)
+})
+
+Deno.test('a card payment that mentions the next due date is a payment, not a statement', () => {
+  const alert = parsed(email(HDFC, 'Payment received on your Credit Card',
+    'Dear Customer, we have received payment of Rs.5,000.00 towards your HDFC Bank Credit Card ending 9001 on 16-10-2026. Your next due date is 05-11-2026.'))
+  expectFields(alert, { kind: 'transfer', transferHint: 'card_payment', amountMinor: 500000, accountMask: '9001' })
+})
+
+Deno.test('a decline stated after "Rs." in the same sentence is still a decline', () => {
+  expectFields(parsed(email(HDFC, 'Transaction alert',
+    'Dear Customer, your transaction of Rs. 7,000.00 at FLIPKART on A/c No. XX1234 was declined on 16-10-2026. Call us if this was not you.')),
+    { entryStatus: 'declined', amountMinor: 700000, accountMask: '1234' })
+})

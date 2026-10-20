@@ -1,7 +1,7 @@
 -- LOCAL TESTING ONLY — never run this in the Supabase dashboard or against a
 -- hosted project. Runs after gmail_test.sql (reuses its helpers).
 --
--- Tests for importing past months from Gmail (migration 0005): choosing
+-- Tests for importing past months from Gmail (migrations 0005, 0006): choosing
 -- months, reading results, discovering accounts and cards, the person's
 -- choices (link / create / ignore / review), balances kept exactly when older
 -- history arrives, what gets recorded vs sent to review, re-imports that never
@@ -229,8 +229,9 @@ select tests.eq((select row(remaining, status)::text from public.gmail_import_ru
 select tests.eq((select string_agg(message_id || ':' || outcome, ', ') from tests.items_of('M:job1') where outcome is not null),
   'a1:recorded, b1:recorded, c1:recorded, d1:needs_review, e1:needs_review, f1:recorded, g1:skipped_account, i1:matched, j1:needs_review, k1:ignored, l1:needs_review',
   'each email''s outcome');
-select tests.eq((select row(recorded, matched, review, ignored, skipped)::text from tests.job('M:job1')),
-  row(4, 1, 4, 2, 1)::text, 'the import''s summary adds up');
+select tests.eq((select row(recorded, matched, review, ignored, declined, failed, skipped)::text from tests.job('M:job1')),
+  row(4, 1, 4, 1, 1, 0, 1)::text, 'the import''s summary adds up');
+select tests.eq((select skip_reasons from tests.job('M:job1')), '{"otp": 1}'::jsonb, 'and says why emails were left out');
 
 select tests.eq((select row(t.type, t.amount_minor, t.merchant, c.name, t.status, t.source_type, t.created_via)::text
                  from public.source_events e join public.transactions t on t.id = e.resulting_transaction_id
@@ -377,6 +378,74 @@ select tests.eq((select count(distinct job_id) from public.gmail_import_begin(te
   'an import abandoned a day ago doesn''t block a new one');
 select tests.eq((select status from tests.job('M:job6')), 'cancelled', '(it was cancelled)');
 reset role;
+
+-- -----------------------------------------------------------------------------
+-- Every transaction is recorded or reviewed, never dropped (0006)
+-- -----------------------------------------------------------------------------
+
+reset role;
+-- Stand-ins for anything in an email's facts that the import boundary might
+-- reject: a reference it can't take (q3), or an email it can't take at all (q4).
+create function tests.reject_some_events() returns trigger language plpgsql as $$
+begin
+  if new.external_transaction_id = 'BOOM123456' or new.external_event_id = 'q4' then
+    raise exception 'rejected for the test';
+  end if;
+  return new;
+end;
+$$;
+create trigger tests_reject_some_events before insert on public.source_events
+  for each row execute function tests.reject_some_events();
+
+set role service_role;
+select tests.as_server();
+select public.gmail_import_cancel(tests.id('M'), id) from public.gmail_import_jobs
+where user_id = tests.id('M') and status = 'listing';
+insert into tests.ids select distinct 'M:job7', job_id from public.gmail_import_begin(tests.id('M'), array[tests.mo(0)]);
+select tests.eq(public.gmail_import_add_messages(tests.id('M'), tests.id('M:job7'),
+  array['q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7']), 7, 'seven emails');
+select tests.eq((select status from public.gmail_import_save(tests.id('M'), tests.id('M:job7'), jsonb_build_array(
+  -- An amount, but no debit or credit Friday could read.
+  tests.alert('q1', 'hdfc', 'bank', '1234', null,      52000, tests.at(0, 1, '10:00'), 'SOMEWHERE', null, 0.3),
+  -- "Your account was debited", with no amount Friday could read.
+  tests.alert('q2', 'hdfc', 'bank', '1234', 'expense', null,  tests.at(0, 1, '11:00'), null, null, 0.3),
+  tests.alert('q3', 'hdfc', 'bank', '1234', 'expense', 9900,  tests.at(0, 1, '12:00'), 'CAFE', 'BOOM123456', 0.97),
+  tests.alert('q4', 'hdfc', 'bank', '1234', 'expense', 9900,  tests.at(0, 1, '13:00'), 'CAFE', null, 0.97),
+  jsonb_build_object('messageId', 'q5', 'skip', 'promotion'),
+  jsonb_build_object('messageId', 'q6', 'skip', 'promotion'),
+  jsonb_build_object('messageId', 'q7', 'skip', 'statement')))),
+  'confirm_accounts', 'emails with a missing direction or amount are kept, not dropped');
+select tests.eq((select skip_reasons from tests.job('M:job7')), '{"promotion": 2, "statement": 1}'::jsonb,
+  'what was left out is counted by reason');
+select tests.eq((select linked_accounts from public.gmail_import_apply_accounts(tests.id('M'), tests.id('M:job7'), jsonb_build_array(
+  jsonb_build_object('institutionKey', 'hdfc', 'instrument', 'bank', 'accountMask', '1234', 'action', 'link', 'accountId', tests.id('M:hdfc'))))),
+  1, 'HDFC confirmed');
+reset role;
+insert into tests.nums values ('M:entries7', tests.entries_of('M'));
+set role service_role;
+select tests.as_server();
+select tests.eq((select status from public.gmail_import_run(tests.id('M'), tests.id('M:job7'))), 'done', 'runs');
+select tests.eq((select row(review_reason, parsed_kind, parsed_amount_minor, suggested_account_id)::text
+                 from public.source_events where external_event_id = 'q1' and user_id = tests.id('M')),
+  row('missing_details', null::text, 52000::bigint, tests.id('M:hdfc'))::text,
+  'an amount without a direction waits in review, on the right account, for the person to say which way');
+select tests.eq((select row(review_reason, parsed_kind, parsed_amount_minor)::text
+                 from public.source_events where external_event_id = 'q2' and user_id = tests.id('M')),
+  row('missing_details', 'expense', null::bigint)::text, 'a debit without a readable amount waits in review for the amount');
+select tests.eq((select row(processing_status, review_reason, parsed_amount_minor)::text
+                 from public.source_events where external_event_id = 'q3' and user_id = tests.id('M')),
+  row('needs_review', 'missing_details', 9900::bigint)::text,
+  'an email the import boundary rejected goes to review with its plainest facts instead of being lost');
+select tests.eq((select string_agg(message_id || ':' || outcome, ', ') from tests.items_of('M:job7') where outcome is not null),
+  'q1:needs_review, q2:needs_review, q3:needs_review, q4:failed', 'each email''s outcome');
+select tests.eq((select row(recorded, review, failed, skipped)::text from tests.job('M:job7')), row(0, 3, 1, 3)::text,
+  'and nothing failed silently: one email that couldn''t be imported at all is counted as such');
+select tests.eq(tests.entries_of('M'), tests.num('M:entries7'), 'nothing unclear was recorded');
+select tests.eq((select count(*) from public.gmail_import_undo(tests.id('M'), tests.id('M:job7'))), 1::bigint, 'it can be undone');
+select tests.eq((select count(*) from public.source_events where user_id = tests.id('M') and external_event_id like 'q%'), 0::bigint,
+  'taking its items out of review');
+reset role;
+drop trigger tests_reject_some_events on public.source_events;
 
 -- -----------------------------------------------------------------------------
 -- Deleting all data

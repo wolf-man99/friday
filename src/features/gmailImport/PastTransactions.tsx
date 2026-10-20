@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { CalendarRange, CircleCheck, History, Inbox, Undo2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { useSettings } from '@/app/settings'
 import { ACCOUNT_TYPE_LABEL } from '@/components/finance/icons'
@@ -33,6 +33,7 @@ import {
   importMonths,
   instrumentLabel,
   IMPORT_RUNNING,
+  leftOut,
   monthsLabel,
   toDecisions,
   type Choice,
@@ -176,7 +177,8 @@ function MonthPicker({ intro, onDone, onNotNow }: { intro: boolean; onDone: () =
             : 'Read alert emails from these months and record their transactions.'}
         </p>
         <p className="text-sm text-muted">
-          You’ll confirm each account first. Anything Friday isn’t sure about waits in Review, and you can undo the import.
+          You’ll confirm each account first. Every transaction is either recorded or waits in Review for you to record or
+          decline — nothing is dropped. You can undo the import.
         </p>
       </div>
       <fieldset className="flex flex-col gap-2">
@@ -399,27 +401,54 @@ function Outcome({ job, onMore }: { job: GmailImportJobRow; onMore: () => void }
     )
   }
 
-  const notTransactions = job.skipped + job.ignored
+  const left = leftOut(job)
   return (
     <Card tone="mint" shadow="md" className="flex flex-col gap-3">
       <p className="label-mono">
         <CircleCheck aria-hidden="true" className="mr-1 inline size-4" strokeWidth={2.5} />
         Imported {monthsLabel(job.months)}
       </p>
-      <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
-        <dt>Recorded</dt>
-        <dd className="tabular font-semibold">{job.recorded}</dd>
-        {job.matched > 0 && (
-          <>
-            <dt>Already in Friday</dt>
-            <dd className="tabular font-semibold">{job.matched}</dd>
-          </>
-        )}
-        <dt>Waiting in Review</dt>
-        <dd className="tabular font-semibold">{job.review}</dd>
-        <dt className="text-muted">Skipped (not transactions, or ignored accounts)</dt>
-        <dd className="tabular text-muted">{notTransactions}</dd>
-      </dl>
+      {job.total_messages === 0 ? (
+        <p>Friday found no emails from your banks, cards or wallets in {monthsLabel(job.months)}.</p>
+      ) : (
+        <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
+          <dt>Recorded</dt>
+          <dd className="tabular font-semibold">{job.recorded}</dd>
+          {job.matched > 0 && (
+            <>
+              <dt>Already in Friday</dt>
+              <dd className="tabular font-semibold">{job.matched}</dd>
+            </>
+          )}
+          <dt>Waiting in Review</dt>
+          <dd className="tabular font-semibold">{job.review}</dd>
+          {job.failed > 0 && (
+            <>
+              <dt className="text-negative">Couldn’t be imported</dt>
+              <dd className="tabular font-semibold text-negative">{job.failed}</dd>
+            </>
+          )}
+        </dl>
+      )}
+      {job.failed > 0 && (
+        <p className="text-sm">
+          Friday couldn’t read {job.failed === 1 ? 'one email' : `${job.failed} emails`} well enough to keep. Import{' '}
+          {monthsLabel(job.months)} again to retry, or add {job.failed === 1 ? 'it' : 'them'} by hand.
+        </p>
+      )}
+      {left.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <p className="text-sm font-semibold">Left out — not transactions</p>
+          <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-sm text-muted">
+            {left.map((row) => (
+              <Fragment key={row.label}>
+                <dt>{row.label}</dt>
+                <dd className="tabular">{row.count}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </div>
+      )}
       {job.truncated && <p className="text-sm">There were more alert emails than one import reads; the newest {job.total_messages} were read.</p>}
       {job.review > 0 && (
         <Link to="/review" className="inline-flex items-center gap-2 font-semibold underline">

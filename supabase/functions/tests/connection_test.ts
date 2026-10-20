@@ -363,7 +363,7 @@ Deno.test('test-fetch: searches alert senders and words, metadata only, bounded'
 
   assert.equal(body.messages.length, 5, 'five by default')
   assert.equal(body.recorded, false, 'nothing is recorded')
-  assert.match(body.query, /^from:\(hdfcbank\.net OR .*\) \(debited OR .*\) newer_than:30d -category:promotions -category:social$/)
+  assert.match(body.query, /^from:\(bank\.in OR fin\.in OR hdfcbank\.net OR .*\) \(debited OR .*\) newer_than:30d -category:promotions -category:social$/)
   assert.deepEqual(Object.keys(body.messages[0]).sort(), ['from', 'id', 'receivedAt', 'snippet', 'subject'])
   assert.equal(body.messages[0].subject, 'Rs.129.00 debited from a/c **1234', 'newest first')
   assert.equal(body.messages[0].receivedAt, '2026-10-30T00:00:00.000Z')

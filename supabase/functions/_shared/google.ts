@@ -271,17 +271,20 @@ export interface MessagePart {
 export interface FullMessage {
   id: string
   internalDate: number
+  /** e.g. CATEGORY_PROMOTIONS: Gmail's own reading of what the email is. */
+  labelIds?: string[]
   payload: MessagePart
 }
 
 /** One message with its text parts, read in memory only (to parse an alert). */
 export async function getFullMessage(fetchFn: Fetch, endpoints: GoogleEndpoints, accessToken: string, id: string): Promise<FullMessage> {
   if (!/^[A-Za-z0-9]+$/.test(id)) throw new GoogleError('bad_response')
-  const params = new URLSearchParams({ format: 'full', fields: 'id,internalDate,payload' })
+  const params = new URLSearchParams({ format: 'full', fields: 'id,internalDate,labelIds,payload' })
   const body = await gmailGet(fetchFn, `${endpoints.gmail}/users/me/messages/${id}?${params}`, accessToken)
   return {
     id: String(body.id ?? id),
     internalDate: Number(body.internalDate) || Date.now(),
+    labelIds: Array.isArray(body.labelIds) ? body.labelIds.filter((label: unknown): label is string => typeof label === 'string') : [],
     payload: body.payload && typeof body.payload === 'object' ? body.payload : {},
   }
 }

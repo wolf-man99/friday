@@ -101,11 +101,17 @@ test('importing records what\'s clear, sends the rest to review, keeps balances'
   await expect(summary).toBeVisible({ timeout: 30_000 })
   const id = uid()
   const counts = psql(`select row(recorded, review, skipped, ignored)::text from public.gmail_import_jobs where user_id = '${id}'`)
-  // Recorded: two HDFC debits, the salary, two card spends, the wallet payment.
-  // Review: the card bill paid from HDFC (a transfer). Skipped: the OTP, a
-  // friend's email, a look-alike sender. Ignored: Yes Bank.
-  expect(counts).toBe('(6,1,3,1)')
-  await expect(page.getByText('Waiting in Review').locator('xpath=following-sibling::dd[1]')).toHaveText('1')
+  // Recorded: three HDFC debits (one from its new .bank.in address), the
+  // salary, two card spends, the wallet payment. Review: the card bill paid
+  // from HDFC (a transfer) and an alert with no clear debit or credit — kept,
+  // not dropped. Left out: the OTP, an offer, a friend's email, a look-alike
+  // sender. Ignored: Yes Bank.
+  expect(counts).toBe('(7,2,4,1)')
+  expect(psql(`select skip_reasons::text from public.gmail_import_jobs where user_id = '${id}'`)).toBe(
+    '{"otp": 1, "promotion": 1, "unknown_sender": 2}',
+  )
+  await expect(page.getByText('Waiting in Review').locator('xpath=following-sibling::dd[1]')).toHaveText('2')
+  await expect(page.getByText('Offers and promotions')).toBeVisible()
   await page.screenshot({ path: 'test-results/gmail-import-done.png', fullPage: true })
 
   // Savings: its balance is exactly what was typed in at sign-up.
@@ -122,6 +128,8 @@ test('importing records what\'s clear, sends the rest to review, keeps balances'
   await page.getByRole('link', { name: /Open Review/ }).click()
   await expect(page).toHaveURL(/\/review/)
   await expect(page.getByText(/15,000/).first()).toBeVisible()
+  await expect(page.getByText(/1,250/).first()).toBeVisible()
+  await page.screenshot({ path: 'test-results/gmail-import-review.png', fullPage: true })
 })
 
 test('undo removes what the import recorded and nothing else', async ({ page }) => {
@@ -129,7 +137,7 @@ test('undo removes what the import recorded and nothing else', async ({ page }) 
   await page.goto('/connections/gmail')
   await page.getByRole('button', { name: 'Undo this import' }).click()
   await page.getByRole('dialog', { name: 'Undo this import?' }).getByRole('button', { name: 'Undo import' }).click()
-  await expect(page.getByText(/Import undone · removed 6/)).toBeVisible()
+  await expect(page.getByText(/Import undone · removed 7/)).toBeVisible()
   const id = uid()
   expect(psql(`select count(*) from public.transactions where user_id = '${id}' and deleted_at is null and created_via = 'import'`)).toBe('0')
   expect(psql(`select count(*) from public.source_events where user_id = '${id}' and processing_status = 'needs_review'`)).toBe('0')

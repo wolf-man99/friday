@@ -1,5 +1,5 @@
 // A Gmail message → what the alert reader needs: sender, subject, sender
-// authentication results and the body as plain text. Attachments are never
+// authentication results, Gmail's labels and the body as plain text. Attachments are never
 // fetched; the text exists only in memory while the alert is read.
 
 import { htmlToText, type RawEmail } from './alerts.ts'
@@ -42,5 +42,6 @@ export function emailFromMessage(message: FullMessage): RawEmail {
     subject: header(message.payload, 'Subject')[0] ?? '',
     text,
     authResults: header(message.payload, 'Authentication-Results'),
+    labels: message.labelIds ?? [],
   }
 }

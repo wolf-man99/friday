@@ -197,7 +197,14 @@ export type GmailImportJobRow = {
   recorded: number
   matched: number
   review: number
+  /** Emails from accounts the person chose to ignore. */
   ignored: number
+  /** Declined or failed payments: no money moved. */
+  declined: number
+  /** Emails that couldn't be imported at all. */
+  failed: number
+  /** Why emails were left out as not transactions, e.g. { otp: 2, promotion: 9 }. */
+  skip_reasons: Record<string, number>
   truncated: boolean
   error_code: string | null
   created_at: string

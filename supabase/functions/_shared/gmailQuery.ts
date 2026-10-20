@@ -2,31 +2,91 @@
 // search only these senders and words, then double-checks the sender of every
 // result itself, so nothing outside the allowlist is ever returned.
 
-/** Alert senders of common Indian banks, cards and wallets (domains or addresses). */
+/**
+ * Alert senders of common Indian banks, cards and wallets (domains or
+ * addresses). bank.in and fin.in: since 2025 RBI-regulated banks (and other
+ * lenders) send from <name>.bank.in / <name>.fin.in, which only they can hold.
+ */
 export const DEFAULT_ALERT_SENDERS: readonly string[] = [
+  'bank.in',
+  'fin.in',
   'hdfcbank.net',
   'hdfcbank.com',
+  'hdfcbank.bank.in',
+  'hdfc.bank.in',
   'icicibank.com',
+  'icicibank.bank.in',
+  'icici.bank.in',
   'axisbank.com',
+  'axisbank.bank.in',
+  'axis.bank.in',
   'sbi.co.in',
+  'sbi.bank.in',
   'sbicard.com',
   'kotak.com',
+  'kotak.bank.in',
+  'kotakbank.bank.in',
   'yesbank.in',
+  'yesbank.bank.in',
+  'yes.bank.in',
   'indusind.com',
+  'indusind.bank.in',
+  'indusindbank.bank.in',
   'idfcfirstbank.com',
+  'idfcfirstbank.bank.in',
+  'idfcfirst.bank.in',
+  'idfcbank.bank.in',
   'federalbank.co.in',
+  'federalbank.bank.in',
+  'federal.bank.in',
   'aubank.in',
+  'aubank.bank.in',
+  'au.bank.in',
   'sc.com',
+  'sc.bank.in',
+  'standardchartered.bank.in',
   'hsbc.co.in',
+  'hsbc.bank.in',
   'americanexpress.com',
   'aexp.com',
   'bankofbaroda.co.in',
+  'bankofbaroda.bank.in',
   'bobcard.co.in',
   'pnb.co.in',
+  'pnb.bank.in',
+  'pnbindia.bank.in',
   'canarabank.com',
+  'canarabank.bank.in',
+  'canara.bank.in',
   'unionbankofindia.co.in',
+  'unionbankofindia.bank.in',
+  'unionbank.bank.in',
   'rblbank.com',
+  'rblbank.bank.in',
+  'rbl.bank.in',
   'dbs.com',
+  'dbs.bank.in',
+  'bankofindia.co.in',
+  'bankofindia.bank.in',
+  'boi.bank.in',
+  'indianbank.in',
+  'indianbank.bank.in',
+  'idbibank.in',
+  'idbibank.bank.in',
+  'idbi.bank.in',
+  'bandhanbank.com',
+  'bandhanbank.bank.in',
+  'bandhan.bank.in',
+  'iob.in',
+  'iob.bank.in',
+  'centralbankofindia.co.in',
+  'centralbank.bank.in',
+  'ktkbank.com',
+  'ktkbank.bank.in',
+  'karnatakabank.bank.in',
+  'sib.co.in',
+  'sib.bank.in',
+  'southindianbank.bank.in',
   'getonecard.app',
   'paytm.com',
   'phonepe.com',
@@ -108,17 +168,17 @@ export function headerValue(headers: { name?: string; value?: string }[] | undef
 }
 
 /**
- * Alert emails from these senders between two instants (an imported month).
- * Wider words than the preview's, and promotions aren't excluded: some banks'
- * alerts land there, and the alert reader skips real promotions itself.
+ * Every email from these senders between two instants (an imported month).
+ * No required words and promotions aren't excluded: an alert worded in a way
+ * Friday doesn't expect, or filed under Promotions, must still be found. The
+ * alert reader decides what is a transaction (and sends what it can't fully
+ * read to review).
  */
 export function buildImportQuery(senders: readonly string[], from: Date, to: Date): string {
   const safeSenders = senders.filter(isSenderRule)
   if (safeSenders.length === 0) throw new Error('No valid alert senders configured')
-  const words = [...ALERT_KEYWORDS, 'paid', 'received', 'sent', 'deposited', 'spent', 'debit', 'credit']
   return [
     `from:(${safeSenders.join(' OR ')})`,
-    `(${[...new Set(words)].join(' OR ')})`,
     `after:${Math.floor(from.getTime() / 1000)}`,
     `before:${Math.ceil(to.getTime() / 1000)}`,
     '-category:social',

@@ -60,6 +60,14 @@ function mailbox() {
       `Dear Customer, INR 500.00 has been debited from your account XXXX5678 on ${ddmmyy(prev + 9 * day)} for UPI/429100000001/SOMEONE.`),
     mail('b6', prev + 12 * day, HDFC, 'Account debited',
       `Dear Customer, Rs.15,000.00 has been debited from account **1234 towards your ICICI Credit Card bill payment on ${ddmmyy(prev + 12 * day)}. Ref No 427600000003.`),
+    // A bank's new .bank.in address; an alert with no clear debit or credit
+    // (kept for review); an offer (left out).
+    mail('n1', prev + 14 * day, 'HDFC Bank InstaAlerts <alerts@hdfcbank.bank.in>', 'You have done a UPI txn',
+      `Dear Customer, Rs.300.00 has been debited from account **1234 to VPA zomato@hdfcbank ZOMATO on ${ddmmyy(prev + 14 * day)}. Your UPI transaction reference number is 429100000014.`),
+    mail('n2', prev + 15 * day, 'HDFC Bank <alerts@hdfcbank.bank.in>', 'Transaction alert',
+      `Dear Customer, Rs.1,250.00 on A/c XX1234 at DMART on ${ddmmyy(prev + 15 * day)}.`),
+    mail('n3', prev + 16 * day, 'HDFC Bank <offers@hdfcbank.bank.in>', 'Festive offers just for you',
+      'Shop on EMI from Rs.1,999 a month. Apply now!'),
     mail('c1', older + 10 * day, HDFC, 'Rs.450.00 debited from a/c **1234',
       `Dear Customer, Rs.450.00 has been debited from account **1234 to VPA dmart@okhdfc DMART on ${ddmmyy(older + 10 * day)}. Your UPI transaction reference number is 427100000004.`),
   ].sort((x, y) => Number(y.internalDate) - Number(x.internalDate))

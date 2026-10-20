@@ -81,8 +81,10 @@ Deno.test('start: finds alert emails in the chosen months only', async () => {
 
   const list = h.google.requests.find((r) => r.url.pathname.endsWith('/messages'))!
   const q = list.url.searchParams.get('q')!
-  assert.match(q, /^from:\(hdfcbank\.net OR /)
-  assert.match(q, new RegExp(`after:${prevStart / 1000} before:\\d+`))
+  // Banks' new .bank.in addresses too, and no required words: an alert worded
+  // unexpectedly is still found (the reader decides what's a transaction).
+  assert.match(q, /^from:\(bank\.in OR fin\.in OR hdfcbank\.net OR .*\) after:/)
+  assert.match(q, new RegExp(`after:${prevStart / 1000} before:\\d+ -category:social$`))
   assert.ok(!q.includes('category:promotions'), 'alerts filed under Promotions are still found')
   assert.equal(list.url.searchParams.get('fields'), 'messages/id,nextPageToken')
 })
@@ -114,6 +116,24 @@ Deno.test('scan: reads each email in full but keeps only what it says', async ()
 
   assert.ok(!h.store.dump().includes(SENTINEL), 'no email text is stored')
   assert.ok(!JSON.stringify(h.lines).includes(SENTINEL) && !JSON.stringify(h.lines).includes('BLUE TOKAI'), 'or logged')
+})
+
+Deno.test('scan: an email that\'s only partly readable is kept for review, not dropped', async () => {
+  const h = await connected()
+  h.google.mailboxes.set('asha@gmail.com', [
+    // A bank's new address; an amount with no debit or credit.
+    { id: 'u1', from: 'HDFC Bank <alerts@hdfcbank.bank.in>', subject: 'Transaction alert', snippet: '', body: `Dear Customer, Rs.1,250.00 at DMART on card xx1234 on ${ddmmyy(prevStart + 3 * DAY)}.`, internalDate: String(prevStart + 3 * DAY) },
+    // "Debited", with no amount Friday can read.
+    { id: 'u2', from: 'HDFC Bank <alerts@hdfcbank.bank.in>', subject: 'Account update', snippet: '', body: 'Dear Customer, your A/c XX1234 has been debited. Visit NetBanking for details.', internalDate: String(prevStart + 4 * DAY) },
+  ])
+  const { body: started } = await startImport(h)
+  assert.equal(started.total, 2, 'the new .bank.in addresses are searched')
+  assert.deepEqual(await scanAll(h, started.jobId), { scanned: 2, total: 2, status: 'confirm_accounts' })
+  const job = h.store.jobs.get(started.jobId)!
+  const u1 = job.items.get('u1')!
+  const u2 = job.items.get('u2')!
+  assert.ok('alert' in u1 && u1.alert.institutionKey === 'hdfc' && u1.alert.kind === null && u1.alert.amountMinor === 125000)
+  assert.ok('alert' in u2 && u2.alert.kind === 'expense' && u2.alert.amountMinor === null)
 })
 
 Deno.test('accounts → confirm → run → undo', async () => {

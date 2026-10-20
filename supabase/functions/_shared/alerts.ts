@@ -3,8 +3,12 @@
 //
 // Recording money wrongly is much worse than asking: anything not clearly
 // understood gets a low confidence, and the import boundary sends it to the
-// review queue instead of the ledger. Only parsed facts leave this module —
-// never the email.
+// review queue instead of the ledger. Dropping a real transaction is wrong
+// too: an email that looks like one but can't be read completely (no clear
+// debit or credit, or no amount Friday can read) is still returned, with what
+// is known, for the person to finish in review. Only emails that clearly
+// aren't transactions (OTPs, statements, offers, account notices) are
+// skipped. Only parsed facts leave this module — never the email.
 
 import { senderAddress } from './gmailQuery.ts'
 
@@ -18,6 +22,8 @@ export interface RawEmail {
   text: string
   /** Raw values of every Authentication-Results header. */
   authResults: string[]
+  /** Gmail's label ids (e.g. CATEGORY_PROMOTIONS), when known. */
+  labels?: string[]
 }
 
 export interface Institution {
@@ -32,9 +38,11 @@ export interface ParsedAlert {
   instrument: Instrument
   /** Last digits of the account or card as shown (up to 4); null if none. */
   accountMask: string | null
-  kind: 'expense' | 'income' | 'refund' | 'transfer'
+  /** null: money moved, but which way isn't clear (the person decides in review). */
+  kind: 'expense' | 'income' | 'refund' | 'transfer' | null
   transferHint: 'card_payment' | 'cash_withdrawal' | 'self' | null
-  amountMinor: number
+  /** null: no amount Friday could read (the person enters it in review). */
+  amountMinor: number | null
   currency: string
   occurredAt: string
   dateSource: 'text' | 'email'
@@ -57,27 +65,38 @@ export type ParseResult = { ok: true; alert: ParsedAlert } | { ok: false; skip: 
 
 type Kind = 'bank' | 'card' | 'wallet'
 
+// Since 2025 Indian banks also send from <name>.bank.in (only RBI-regulated
+// banks can hold one); any <name>.bank.in or .fin.in sender counts as a bank,
+// matched to a known one by name where possible (see institutionEntry).
 const INSTITUTIONS: { key: string; name: string; kind: Kind; domains: string[] }[] = [
-  { key: 'hdfc', name: 'HDFC Bank', kind: 'bank', domains: ['hdfcbank.net', 'hdfcbank.com'] },
-  { key: 'icici', name: 'ICICI Bank', kind: 'bank', domains: ['icicibank.com'] },
-  { key: 'axis', name: 'Axis Bank', kind: 'bank', domains: ['axisbank.com'] },
-  { key: 'sbi', name: 'State Bank of India', kind: 'bank', domains: ['sbi.co.in'] },
+  { key: 'hdfc', name: 'HDFC Bank', kind: 'bank', domains: ['hdfcbank.net', 'hdfcbank.com', 'hdfcbank.bank.in', 'hdfc.bank.in'] },
+  { key: 'icici', name: 'ICICI Bank', kind: 'bank', domains: ['icicibank.com', 'icicibank.bank.in', 'icici.bank.in'] },
+  { key: 'axis', name: 'Axis Bank', kind: 'bank', domains: ['axisbank.com', 'axisbank.bank.in', 'axis.bank.in'] },
+  { key: 'sbi', name: 'State Bank of India', kind: 'bank', domains: ['sbi.co.in', 'sbi.bank.in'] },
   { key: 'sbicard', name: 'SBI Card', kind: 'card', domains: ['sbicard.com'] },
-  { key: 'kotak', name: 'Kotak Mahindra Bank', kind: 'bank', domains: ['kotak.com'] },
-  { key: 'yes', name: 'Yes Bank', kind: 'bank', domains: ['yesbank.in'] },
-  { key: 'indusind', name: 'IndusInd Bank', kind: 'bank', domains: ['indusind.com'] },
-  { key: 'idfcfirst', name: 'IDFC FIRST Bank', kind: 'bank', domains: ['idfcfirstbank.com'] },
-  { key: 'federal', name: 'Federal Bank', kind: 'bank', domains: ['federalbank.co.in'] },
-  { key: 'au', name: 'AU Small Finance Bank', kind: 'bank', domains: ['aubank.in'] },
-  { key: 'sc', name: 'Standard Chartered', kind: 'bank', domains: ['sc.com'] },
-  { key: 'hsbc', name: 'HSBC', kind: 'bank', domains: ['hsbc.co.in'] },
+  { key: 'kotak', name: 'Kotak Mahindra Bank', kind: 'bank', domains: ['kotak.com', 'kotak.bank.in', 'kotakbank.bank.in'] },
+  { key: 'yes', name: 'Yes Bank', kind: 'bank', domains: ['yesbank.in', 'yesbank.bank.in', 'yes.bank.in'] },
+  { key: 'indusind', name: 'IndusInd Bank', kind: 'bank', domains: ['indusind.com', 'indusind.bank.in', 'indusindbank.bank.in'] },
+  { key: 'idfcfirst', name: 'IDFC FIRST Bank', kind: 'bank', domains: ['idfcfirstbank.com', 'idfcfirstbank.bank.in', 'idfcfirst.bank.in', 'idfcbank.bank.in'] },
+  { key: 'federal', name: 'Federal Bank', kind: 'bank', domains: ['federalbank.co.in', 'federalbank.bank.in', 'federal.bank.in'] },
+  { key: 'au', name: 'AU Small Finance Bank', kind: 'bank', domains: ['aubank.in', 'aubank.bank.in', 'au.bank.in'] },
+  { key: 'sc', name: 'Standard Chartered', kind: 'bank', domains: ['sc.com', 'sc.bank.in', 'standardchartered.bank.in'] },
+  { key: 'hsbc', name: 'HSBC', kind: 'bank', domains: ['hsbc.co.in', 'hsbc.bank.in'] },
   { key: 'amex', name: 'American Express', kind: 'card', domains: ['americanexpress.com', 'aexp.com'] },
-  { key: 'bob', name: 'Bank of Baroda', kind: 'bank', domains: ['bankofbaroda.co.in', 'bobcard.co.in'] },
-  { key: 'pnb', name: 'Punjab National Bank', kind: 'bank', domains: ['pnb.co.in'] },
-  { key: 'canara', name: 'Canara Bank', kind: 'bank', domains: ['canarabank.com'] },
-  { key: 'union', name: 'Union Bank of India', kind: 'bank', domains: ['unionbankofindia.co.in'] },
-  { key: 'rbl', name: 'RBL Bank', kind: 'bank', domains: ['rblbank.com'] },
-  { key: 'dbs', name: 'DBS Bank', kind: 'bank', domains: ['dbs.com'] },
+  { key: 'bob', name: 'Bank of Baroda', kind: 'bank', domains: ['bankofbaroda.co.in', 'bankofbaroda.bank.in', 'bobcard.co.in'] },
+  { key: 'pnb', name: 'Punjab National Bank', kind: 'bank', domains: ['pnb.co.in', 'pnb.bank.in', 'pnbindia.bank.in'] },
+  { key: 'canara', name: 'Canara Bank', kind: 'bank', domains: ['canarabank.com', 'canarabank.bank.in', 'canara.bank.in'] },
+  { key: 'union', name: 'Union Bank of India', kind: 'bank', domains: ['unionbankofindia.co.in', 'unionbankofindia.bank.in', 'unionbank.bank.in'] },
+  { key: 'rbl', name: 'RBL Bank', kind: 'bank', domains: ['rblbank.com', 'rblbank.bank.in', 'rbl.bank.in'] },
+  { key: 'dbs', name: 'DBS Bank', kind: 'bank', domains: ['dbs.com', 'dbs.bank.in'] },
+  { key: 'boi', name: 'Bank of India', kind: 'bank', domains: ['bankofindia.co.in', 'bankofindia.bank.in', 'boi.bank.in'] },
+  { key: 'indianbank', name: 'Indian Bank', kind: 'bank', domains: ['indianbank.in', 'indianbank.bank.in'] },
+  { key: 'idbi', name: 'IDBI Bank', kind: 'bank', domains: ['idbibank.in', 'idbibank.bank.in', 'idbi.bank.in'] },
+  { key: 'bandhan', name: 'Bandhan Bank', kind: 'bank', domains: ['bandhanbank.com', 'bandhanbank.bank.in', 'bandhan.bank.in'] },
+  { key: 'iob', name: 'Indian Overseas Bank', kind: 'bank', domains: ['iob.in', 'iob.bank.in'] },
+  { key: 'central', name: 'Central Bank of India', kind: 'bank', domains: ['centralbankofindia.co.in', 'centralbank.bank.in'] },
+  { key: 'karnataka', name: 'Karnataka Bank', kind: 'bank', domains: ['ktkbank.com', 'ktkbank.bank.in', 'karnatakabank.bank.in'] },
+  { key: 'sib', name: 'South Indian Bank', kind: 'bank', domains: ['sib.co.in', 'sib.bank.in', 'southindianbank.bank.in'] },
   { key: 'onecard', name: 'OneCard', kind: 'card', domains: ['getonecard.app'] },
   { key: 'paytm', name: 'Paytm', kind: 'wallet', domains: ['paytm.com'] },
   { key: 'phonepe', name: 'PhonePe', kind: 'wallet', domains: ['phonepe.com'] },
@@ -94,10 +113,31 @@ function domainMatches(domain: string, rule: string): boolean {
   return domain === rule || domain.endsWith(`.${rule}`)
 }
 
-function institutionEntry(fromHeader: string) {
+// <name>.bank.in (banks) and <name>.fin.in (other RBI-regulated lenders).
+const REGULATED_DOMAIN = /(?:^|\.)([a-z0-9-]{1,63})\.(bank|fin)\.in$/
+
+/** "HDFC Bank InstaAlerts <alerts@…>" → "HDFC Bank InstaAlerts" (only used as a name). */
+function displayName(fromHeader: string): string | null {
+  const name = fromHeader.replace(/<[^<>]*>\s*$/, '').replace(/["']/g, '').replace(/\s+/g, ' ').trim()
+  return name && !name.includes('@') ? name.slice(0, 60) : null
+}
+
+function institutionEntry(fromHeader: string): { key: string; name: string; kind: Kind } | null {
   const domain = senderAddress(fromHeader).split('@')[1] ?? ''
   if (!domain) return null
-  return INSTITUTIONS.find((i) => i.domains.some((rule) => domainMatches(domain, rule))) ?? null
+  const known = INSTITUTIONS.find((i) => i.domains.some((rule) => domainMatches(domain, rule)))
+  if (known) return known
+  const regulated = domain.match(REGULATED_DOMAIN)
+  if (!regulated) return null
+  // hdfcbank.bank.in is the bank that also sends from hdfcbank.net.
+  const label = regulated[1]
+  const sameBank = INSTITUTIONS.find((i) => i.key === label || i.domains.some((rule) => rule.split('.')[0] === label))
+  if (sameBank) return sameBank
+  return {
+    key: label.replace(/[^a-z0-9]/g, '_').slice(0, 40),
+    name: displayName(fromHeader) ?? `${label}.${regulated[2]}.in`,
+    kind: 'bank',
+  }
 }
 
 export function institutionFor(fromHeader: string): Institution | null {
@@ -159,6 +199,8 @@ const AMOUNT_RE = /(?:\b(INR|Rs|USD|EUR|GBP|AED|SGD)\.?|₹)\s*([0-9][0-9,]*(?:\
 
 // Amounts that describe the account, not the transaction.
 const NOT_TRANSACTION_AMOUNT = /(bal(?:ance)?|avl|available|limit|outstanding|o\/s|due|total due|min(?:imum)?)\b[^0-9₹]{0,20}$/i
+// Amounts in offers: "up to ₹500", "save Rs 2,000", "flat ₹100".
+const OFFER_AMOUNT = /\b(up ?to|worth|save|flat|win|minimum (?:purchase|spend|order|transaction)(?: of| value)?)\s*(?:of\s*)?[:-]?\s*$/i
 
 interface Amount {
   index: number
@@ -177,7 +219,7 @@ function amountsIn(text: string): Amount[] {
   const found: Amount[] = []
   for (const match of text.matchAll(AMOUNT_RE)) {
     const before = text.slice(Math.max(0, match.index! - 30), match.index!)
-    if (NOT_TRANSACTION_AMOUNT.test(before)) continue
+    if (NOT_TRANSACTION_AMOUNT.test(before) || OFFER_AMOUNT.test(before)) continue
     const code = (match[1] ?? match[4] ?? 'INR').toUpperCase()
     const minor = toMinor(match[2] ?? match[3])
     if (minor === null) continue
@@ -413,6 +455,11 @@ const NOT_TRANSACTION_RE =
 const PROMOTION_RE =
   /\b(pre-?approved|apply now|exclusive offer|special offer|limited period|eligible for|upgrade your|congratulations|loan of up to|get up to|win |reward points? summary|avail now|instant loan)\b/i
 const DECLINED_RE = /\b(declined|failed|unsuccessful|could not be processed|not processed|was not successful|rejected)\b/i
+// Words that only a transaction uses: they keep an email from being taken for
+// a notice or an offer.
+const STRONG_DEBIT = /\b(debited|spent|withdrawn|deducted|paid to|sent to|transaction of|txn of|purchase of)\b/i
+const STRONG_CREDIT = /\b(credited|refunded|reversed|received from|received (?:a |your )?payment|payment (?:has been |was )?received)\b/i
+const STRONG_RE = new RegExp(`${STRONG_DEBIT.source}|${STRONG_CREDIT.source}|\\btxn\\b`, 'i')
 const PENDING_RE = /\b(pending|authori[sz]ed|authori[sz]ation|on hold|blocked amount)\b/i
 
 // -----------------------------------------------------------------------------
@@ -431,17 +478,44 @@ export function parseAlert(email: RawEmail, options: { timeZone: string }): Pars
   // your OTP") come later and must not change anything.
   const head = `${subject}\n${body}`.slice(0, 1600)
   const opening = `${subject}\n${body.slice(0, 400)}`
+  const transactionWords = STRONG_RE.test(opening)
 
   if (OTP_RE.test(subject) || OTP_IN_BODY.test(body.slice(0, 400))) return { ok: false, skip: 'otp' }
-  if (STATEMENT_RE.test(subject) || STATEMENT_RE.test(body.slice(0, 300))) return { ok: false, skip: 'statement' }
-  if (NOT_TRANSACTION_RE.test(opening) && !/\b(debited|credited|spent)\b/i.test(opening)) {
-    return { ok: false, skip: 'not_a_transaction' }
-  }
+  if (STATEMENT_RE.test(subject) || (STATEMENT_RE.test(body.slice(0, 300)) && !transactionWords)) return { ok: false, skip: 'statement' }
+  if (NOT_TRANSACTION_RE.test(opening) && !transactionWords) return { ok: false, skip: 'not_a_transaction' }
+  const offer = PROMOTION_RE.test(opening) || (email.labels ?? []).includes('CATEGORY_PROMOTIONS')
+  const verified = senderVerified(email.authResults, email.from)
 
   const anchor = findAnchor(head)
   if (!anchor) {
-    if (PROMOTION_RE.test(opening)) return { ok: false, skip: 'promotion' }
-    return { ok: false, skip: amountsIn(head).length === 0 ? 'no_amount' : 'not_a_transaction' }
+    if (offer && !transactionWords) return { ok: false, skip: 'promotion' }
+    // Money moved but it can't all be read: kept for the person to finish in review.
+    const amount = amountsIn(head)[0] ?? null
+    const direction: Direction | null = STRONG_DEBIT.test(opening) ? 'debit' : STRONG_CREDIT.test(opening) ? 'credit' : null
+    if (!amount && !direction) return { ok: false, skip: 'no_amount' }
+    const window = head.slice(0, 600)
+    const holder = findHolder(window, head, entry.kind)
+    const when = occurredAt(email, window, head, options.timeZone)
+    return {
+      ok: true,
+      alert: {
+        institution,
+        instrument: holder.instrument,
+        accountMask: holder.mask,
+        kind: direction === 'debit' ? 'expense' : direction === 'credit' ? 'income' : null,
+        transferHint: null,
+        amountMinor: amount?.minor ?? null,
+        currency: amount?.currency ?? 'INR',
+        occurredAt: when.occurredAt,
+        dateSource: when.dateSource,
+        merchant: findMerchant(window),
+        reference: findReference(head),
+        entryStatus: 'posted',
+        categoryHint: null,
+        confidence: 0.3,
+        senderVerified: verified,
+      },
+    }
   }
 
   // The transaction's own words: around the direction word and its amount.
@@ -449,12 +523,12 @@ export function parseAlert(email: RawEmail, options: { timeZone: string }): Pars
   const window = head.slice(start, Math.max(anchor.index, anchor.amount.index) + 300)
   const holder = findHolder(window, head, entry.kind)
 
-  if (PROMOTION_RE.test(opening) && holder.mask === null && holder.instrument !== 'wallet') {
+  if (offer && holder.mask === null && holder.instrument !== 'wallet' && !STRONG_RE.test(window)) {
     return { ok: false, skip: 'promotion' }
   }
 
   // Kind of transaction.
-  let kind: ParsedAlert['kind'] = anchor.direction === 'debit' ? 'expense' : 'income'
+  let kind: NonNullable<ParsedAlert['kind']> = anchor.direction === 'debit' ? 'expense' : 'income'
   let transferHint: ParsedAlert['transferHint'] = null
   const lowerWindow = window.toLowerCase()
   if (anchor.direction === 'credit' && /\b(refund(?:ed)?|revers(?:ed|al)|cash ?back)\b/.test(lowerWindow)) {
@@ -476,37 +550,26 @@ export function parseAlert(email: RawEmail, options: { timeZone: string }): Pars
     transferHint = 'self'
   }
 
-  const entryStatus: ParsedAlert['entryStatus'] = DECLINED_RE.test(window) ? 'declined' : PENDING_RE.test(window) ? 'pending' : 'posted'
+  // Declined only when the subject or the transaction's own sentence says so;
+  // "if the transaction failed…" elsewhere only makes it less certain.
+  const declined = DECLINED_RE.test(subject) || statesFailure(sentenceAround(head, anchor))
+  const mentionsFailure = !declined && DECLINED_RE.test(window)
+  const entryStatus: ParsedAlert['entryStatus'] = declined ? 'declined' : PENDING_RE.test(window) ? 'pending' : 'posted'
 
-  // When it happened: the email's own date if plausible, else when it arrived.
-  const found = findDate(window) ?? findDate(head)
-  let occurredAt = email.internalDate
-  let dateSource: ParsedAlert['dateSource'] = 'email'
-  if (found) {
-    const [hour, minute, second] = found.time ?? [12, 0, 0]
-    let instant = zonedToUtc(found.year, found.month, found.day, hour, minute, second, options.timeZone)
-    if (!found.time && localDay(email.internalDate, options.timeZone) === localDay(instant, options.timeZone)) {
-      instant = email.internalDate
-    }
-    if (instant >= email.internalDate - 10 * 86_400_000 && instant <= email.internalDate + 86_400_000) {
-      occurredAt = instant
-      dateSource = 'text'
-    }
-  }
-
+  const when = occurredAt(email, window, head, options.timeZone)
   const merchant = findMerchant(window)
   const reference = findReference(window) ?? findReference(head)
-  const verified = senderVerified(email.authResults, email.from)
 
   // Other transaction-looking amounts close by make the reading uncertain.
   const others = new Set(amountsIn(window).map((a) => a.minor).filter((minor) => minor !== anchor.amount.minor))
 
   let confidence = 0.97
-  if (dateSource === 'email') confidence -= 0.05
+  if (when.dateSource === 'email') confidence -= 0.05
   if (holder.mask === null && holder.instrument !== 'wallet') confidence = Math.min(confidence, 0.6)
   if (!verified) confidence = Math.min(confidence, 0.6)
   if (others.size > 0) confidence = Math.min(confidence, 0.7)
   if (kind === 'refund' || kind === 'transfer') confidence = Math.min(confidence, 0.7)
+  if (mentionsFailure || offer) confidence = Math.min(confidence, 0.6)
 
   return {
     ok: true,
@@ -518,8 +581,8 @@ export function parseAlert(email: RawEmail, options: { timeZone: string }): Pars
       transferHint,
       amountMinor: anchor.amount.minor,
       currency: anchor.amount.currency,
-      occurredAt: new Date(occurredAt).toISOString(),
-      dateSource,
+      occurredAt: when.occurredAt,
+      dateSource: when.dateSource,
       merchant,
       reference,
       entryStatus,
@@ -528,4 +591,40 @@ export function parseAlert(email: RawEmail, options: { timeZone: string }): Pars
       senderVerified: verified,
     },
   }
+}
+
+/** The sentence (or line) stating the transaction: around the direction word and its amount. */
+function sentenceAround(text: string, anchor: Anchor): string {
+  const from = Math.min(anchor.index, anchor.amount.index)
+  const to = Math.max(anchor.index, anchor.amount.index)
+  // "Rs. 250" and "A/c No. 1234" don't end a sentence.
+  const ends = [...text.matchAll(/\n|(?<!\b(?:rs|no|nos|a\/c|ac|acct|inr|ref|txn|mr|ms|dr|st))[.!?](?=\s|$)/gi)].map((m) => m.index!)
+  const start = ends.filter((index) => index < from).pop() ?? -1
+  const end = ends.find((index) => index >= to) ?? text.length
+  return text.slice(start + 1, end)
+}
+
+/** "…was declined", but not "if the transaction failed…". */
+function statesFailure(sentence: string): boolean {
+  for (const match of sentence.matchAll(new RegExp(DECLINED_RE.source, 'gi'))) {
+    const lead = sentence.slice(Math.max(0, match.index! - 40), match.index!)
+    if (!/\b(if|in case|incase|should|whether)\b/i.test(lead)) return true
+  }
+  return false
+}
+
+/** When it happened: the email's own date if plausible, else when it arrived. */
+function occurredAt(email: RawEmail, window: string, head: string, timeZone: string): { occurredAt: string; dateSource: ParsedAlert['dateSource'] } {
+  const found = findDate(window) ?? findDate(head)
+  if (found) {
+    const [hour, minute, second] = found.time ?? [12, 0, 0]
+    let instant = zonedToUtc(found.year, found.month, found.day, hour, minute, second, timeZone)
+    if (!found.time && localDay(email.internalDate, timeZone) === localDay(instant, timeZone)) {
+      instant = email.internalDate
+    }
+    if (instant >= email.internalDate - 10 * 86_400_000 && instant <= email.internalDate + 86_400_000) {
+      return { occurredAt: new Date(instant).toISOString(), dateSource: 'text' }
+    }
+  }
+  return { occurredAt: new Date(email.internalDate).toISOString(), dateSource: 'email' }
 }

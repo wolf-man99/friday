@@ -68,6 +68,7 @@ order**:
 | `20261020000000_ledger_model.sql` | Ledger model: refunds and reversals, statuses, sources, wallet accounts, institution and credit limit, the import boundary (`source_events`) and review-queue functions, net-of-refund reports. Additive and safe to re-run; existing entries become posted, manual entries with unchanged amounts and balances. It also archives the seeded "Refunds" **income** category (refunds now reduce spending); restore it from Categories if you want it back. |
 | `20261021000000_gmail_connection.sql` | Gmail connection foundation: connection metadata on `source_connections`, a private schema for OAuth state and encrypted tokens, and server-only functions. Additive and safe to re-run. Only needed if you'll connect Gmail. |
 | `20261022000000_gmail_import.sql` | Importing past months from Gmail: import jobs, remembered account links, balances that stay exact when older history arrives (`balance_from`), and server-only import steps. Additive and safe to re-run. |
+| `20261023000000_gmail_import_review_all.sql` | Gmail import: emails that can't be read completely go to Review instead of being dropped; honest counts of what was left out and why. Run after 0005. Additive and safe to re-run. |
 
 **These are the only files to run in Supabase.** The SQL under `tests/db/` is for
 local testing; it creates fake users and refuses to run in a Supabase project.

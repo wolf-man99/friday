@@ -146,14 +146,22 @@ diagnostic and is covered by the function tests:
 Right after connecting (and any time later on the Gmail page), Friday offers to
 import **this month and the two before it** — the person picks any of them.
 
-1. **Find** (`import-start`): one Gmail search per month — allowlisted
-   senders, alert words, `after:`/`before:` the month's bounds in the person's
-   time zone. At most 1,500 emails per import (the newest).
+1. **Find** (`import-start`): one Gmail search per month — every email from
+   the allowlisted senders between `after:`/`before:` the month's bounds in
+   the person's time zone, with no required words (an alert worded in a way
+   Friday doesn't expect must still be found). The senders include `bank.in`
+   and `fin.in`: since 2025 Indian banks send from `<name>.bank.in`, which only
+   RBI-regulated banks can hold. At most 1,500 emails per import (the
+   newest).
 2. **Read** (`import-scan`, 15 emails per request): each email is fetched in
    full, read in memory by `supabase/functions/_shared/alerts.ts`, and only
    the facts are stored (`friday_private.gmail_import_items`): bank or card,
    last digits, amount, direction, date, merchant, reference, sender check.
-   OTPs, statements, promotions and other non-transactions are skipped.
+   Only emails that clearly aren't transactions are left out — OTPs,
+   statements and bill reminders, offers, account notices (logins, KYC,
+   mandates), emails with no amount — and the import counts them by reason
+   (`gmail_import_jobs.skip_reasons`) so the summary shows what was left out
+   and why.
 3. **Confirm accounts** (`import-accounts`, `import-confirm`): the bank
    accounts, cards and wallets the emails mention, each with a suggestion —
    the Friday account it was linked to before or looks like, or a new one.
@@ -187,12 +195,21 @@ and its starting balance is restated as of that date, so today's balance is
 unchanged; entries before it count in spending, not in the balance. New
 accounts start on the first imported day.
 
-**Reading alerts** (`alerts.ts`) knows the common wordings of ~25 Indian banks,
-card issuers and wallets. A transaction is recorded automatically only when
-the sender's domain signed the email (DKIM/DMARC), the account number, amount,
-direction and date are clear and there's one transaction amount; everything
-else waits in Review. Formats it doesn't know are skipped or reviewed, never
-guessed — tell Friday's developer which emails were missed and add a rule.
+**Every transaction is recorded or reviewed, never dropped.** Reading alerts
+(`alerts.ts`) knows the common wordings of ~35 Indian banks, card issuers and
+wallets, and treats any other `<name>.bank.in` sender as a bank. A transaction
+is recorded automatically only when the sender's domain signed the email
+(DKIM/DMARC), the account number, amount, direction and date are clear and
+there's one transaction amount; everything else waits in Review. An email that
+looks like a transaction but can't be read completely — an amount with no
+clear debit or credit, or "debited" with no readable amount — is kept with
+what was read and waits in Review as *Some details couldn't be read*, where
+the person sets the type and amount and records it, or ignores it. If the
+import boundary rejects what was read, the email goes to Review with its
+plainest facts instead; one that can't be kept at all is counted as
+*Couldn't be imported* (never silently). A declined or failed payment (said in
+the subject or the transaction's own sentence) records nothing and is counted
+as such.
 
 ## Logging
 

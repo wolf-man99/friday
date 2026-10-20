@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AccountBalanceRow } from '@/data/database.types'
 import type { DiscoveredAccount } from '@/data/gmail'
 import { parseAmountToMinor } from '@/lib/money'
-import { compatibleAccounts, defaultChoice, groupKey, importMonths, instrumentLabel, monthsLabel, toDecisions } from './plan'
+import { compatibleAccounts, defaultChoice, groupKey, importMonths, instrumentLabel, leftOut, monthsLabel, toDecisions } from './plan'
 
 const account = (id: string, type: AccountBalanceRow['type'], status: AccountBalanceRow['status'] = 'active') =>
   ({ id, type, status, name: id, opening_date: '2026-10-10' }) as AccountBalanceRow
@@ -31,6 +31,12 @@ describe('months offered', () => {
       { value: '2026-08', label: 'August 2026' },
     ])
     expect(importMonths('2026-01-05').map((m) => m.value)).toEqual(['2026-01', '2025-12', '2025-11'])
+  })
+
+  it('moves on with the calendar: in November, November to date, October and September', () => {
+    expect(importMonths('2026-11-03').map((m) => m.label)).toEqual(['November 2026 (to today)', 'October 2026', 'September 2026'])
+    expect(importMonths('2026-12-31').map((m) => m.label)).toEqual(['December 2026 (to today)', 'November 2026', 'October 2026'])
+    expect(importMonths('2027-02-28').map((m) => m.value)).toEqual(['2027-02', '2027-01', '2026-12'])
   })
 
   it('names chosen months in order', () => {
@@ -100,5 +106,19 @@ describe('turning choices into decisions', () => {
     expect(
       toDecisions(groups, { [groupKey(groups[0])]: { ...base, kind: 'ignore' }, [groupKey(groups[1])]: { ...base, kind: 'create', name: '  ' } }, parseAmountToMinor),
     ).toMatchObject({ ok: false, key: 'icici/credit_card/9001', message: 'Give the new account a name.' })
+  })
+})
+
+describe('what an import left out', () => {
+  it('says why, largest first, including declined payments and ignored accounts', () => {
+    expect(leftOut({ skip_reasons: { otp: 2, promotion: 9, no_amount: 1, mystery: 1 }, declined: 1, ignored: 3 })).toEqual([
+      { label: 'Offers and promotions', count: 9 },
+      { label: 'OTPs', count: 2 },
+      { label: 'Other emails with no amount', count: 1 },
+      { label: 'Other emails that aren’t transactions', count: 1 },
+      { label: 'Declined or failed payments (no money moved)', count: 1 },
+      { label: 'From accounts you chose to ignore', count: 3 },
+    ])
+    expect(leftOut({ skip_reasons: {}, declined: 0, ignored: 0 })).toEqual([])
   })
 })

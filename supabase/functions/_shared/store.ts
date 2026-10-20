@@ -73,9 +73,11 @@ export interface StoredAlert {
   institutionName: string
   instrument: string
   accountMask: string | null
-  kind: string
+  /** null: which way the money went isn't clear (reviewed by the person). */
+  kind: string | null
   transferHint: string | null
-  amountMinor: number
+  /** null: no amount could be read (reviewed by the person). */
+  amountMinor: number | null
   currency: string
   occurredAt: string
   merchant: string | null

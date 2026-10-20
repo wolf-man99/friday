@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
-import { useAuth } from '@/app/auth'
+import { signOut, useAuth } from '@/app/auth'
+import { setRecoveryPending } from '@/app/recovery'
 import { Wordmark } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -9,7 +10,11 @@ import { InlineError } from '@/components/ui/States'
 import { friendlyError } from '@/lib/errors'
 import { supabase } from '@/lib/supabase'
 
-/** Landing page for the password-reset email link. */
+/**
+ * Landing page for the password-reset email link. The link signs the person
+ * in, but the rest of the app stays locked (see app/recovery.ts) until a new
+ * password is saved here — or they cancel, which signs them out.
+ */
 export function ResetPassword() {
   const { session, loading } = useAuth()
   const navigate = useNavigate()
@@ -24,6 +29,7 @@ export function ResetPassword() {
     const { error: updateError } = await supabase.auth.updateUser({ password })
     setBusy(false)
     if (updateError) return setError(friendlyError(updateError))
+    setRecoveryPending(false)
     navigate('/', { replace: true })
   }
 
@@ -40,6 +46,17 @@ export function ResetPassword() {
             {error && <InlineError message={error} />}
             <Button type="submit" variant="primary" size="lg" block loading={busy}>
               Save password
+            </Button>
+            <Button
+              variant="ghost"
+              block
+              disabled={busy}
+              onClick={async () => {
+                await signOut()
+                navigate('/login', { replace: true })
+              }}
+            >
+              Cancel and sign out
             </Button>
           </form>
         )}

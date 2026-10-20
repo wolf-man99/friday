@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { useAuth } from '@/app/auth'
+import { isRecoveryPending, RESET_PATH } from '@/app/recovery'
 import { Wordmark } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -25,7 +26,7 @@ export function SignIn() {
   const [notice, setNotice] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
 
-  if (session) return <Navigate to={from} replace />
+  if (session) return <Navigate to={isRecoveryPending() ? RESET_PATH : from} replace />
 
   async function submit(event: FormEvent) {
     event.preventDefault()

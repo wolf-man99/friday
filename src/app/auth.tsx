@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { supabase } from '@/lib/supabase'
+import { isRecoveryPending, RESET_PATH } from './recovery'
 import { Splash } from './Splash'
 
 interface AuthState {
@@ -45,6 +46,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (loading) return <Splash />
   // The hash too: Gmail's connection page receives its one-time ticket there.
   if (!session) return <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />
+  // Signed in by a reset link: nothing but choosing a new password until it's saved.
+  if (isRecoveryPending()) return <Navigate to={RESET_PATH} replace />
   return children
 }
 

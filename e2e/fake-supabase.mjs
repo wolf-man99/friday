@@ -1,11 +1,12 @@
 // A tiny stand-in for Supabase's API gateway, for local end-to-end tests:
 //   /rest/v1/*  → proxied to a local PostgREST (real SQL, real RLS)
 //   /auth/v1/*  → minimal email/password auth that mints JWTs PostgREST trusts
+//   /functions/v1/* → proxied to a local Edge Functions server (FUNCTIONS_URL), if set
 // Users are created in the test database's auth.users table, so the sign-up
 // trigger, profile and default categories run exactly as in production.
 //
 // Env: PORT (54321), POSTGREST_URL (http://localhost:3000), JWT_SECRET,
-//      DATABASE_URL (postgres superuser URL of the test database)
+//      DATABASE_URL (postgres superuser URL of the test database), FUNCTIONS_URL
 
 import { execFileSync } from 'node:child_process'
 import { createHmac, randomUUID } from 'node:crypto'
@@ -15,6 +16,7 @@ const PORT = Number(process.env.PORT ?? 54321)
 const POSTGREST_URL = process.env.POSTGREST_URL ?? 'http://localhost:3000'
 const JWT_SECRET = process.env.JWT_SECRET ?? 'local-dev-jwt-secret-at-least-32-characters-long'
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/friday_e2e'
+const FUNCTIONS_URL = process.env.FUNCTIONS_URL ?? ''
 
 const passwords = new Map() // email → { id, password, metadata }
 
@@ -139,8 +141,8 @@ async function proxyRest(req, res, url) {
   const headers = { ...req.headers }
   delete headers.host
   delete headers.apikey
-  // PostgREST rejects the publishable key; only forward real JWTs.
-  if (headers.authorization && !decode(headers.authorization.replace('Bearer ', ''))?.sub) delete headers.authorization
+  // PostgREST rejects the publishable key; only forward real JWTs (a user's, or the service role's).
+  if (headers.authorization && !decode(headers.authorization.replace('Bearer ', ''))?.role) delete headers.authorization
   const body = ['GET', 'HEAD'].includes(req.method) ? undefined : await readBody(req)
   const response = await fetch(target, { method: req.method, headers, body })
   const out = Buffer.from(await response.arrayBuffer())
@@ -153,9 +155,27 @@ async function proxyRest(req, res, url) {
   res.end(out)
 }
 
+// Like Supabase's gateway: passes requests (preflights included) straight to
+// the function and its response straight back, redirects unfollowed.
+async function proxyFunction(req, res, url) {
+  if (!FUNCTIONS_URL) return send(res, 404, { code: 'NOT_FOUND', message: 'Requested function was not found' })
+  const target = FUNCTIONS_URL + url.pathname.replace('/functions/v1', '') + url.search
+  const headers = { ...req.headers }
+  delete headers.host
+  const body = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) ? undefined : await readBody(req)
+  const response = await fetch(target, { method: req.method, headers, body, redirect: 'manual' })
+  const out = Buffer.from(await response.arrayBuffer())
+  // fetch already decoded the body, so its encoding and length no longer apply.
+  const passHeaders = Object.fromEntries(response.headers)
+  for (const name of ['content-encoding', 'content-length', 'transfer-encoding', 'connection']) delete passHeaders[name]
+  res.writeHead(response.status, passHeaders)
+  res.end(out)
+}
+
 createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`)
+    if (url.pathname.startsWith('/functions/v1/')) return await proxyFunction(req, res, url)
     if (req.method === 'OPTIONS') return send(res, 204)
     if (url.pathname.startsWith('/auth/v1')) return await handleAuth(req, res, url)
     if (url.pathname.startsWith('/rest/v1')) return await proxyRest(req, res, url)

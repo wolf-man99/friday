@@ -9,6 +9,7 @@ import { Activity } from '@/pages/Activity'
 import { Categories } from '@/pages/Categories'
 import { EntryDetail } from '@/pages/EntryDetail'
 import { EntryEditor } from '@/pages/EntryEditor'
+import { GmailConnection } from '@/pages/GmailConnection'
 import { Home } from '@/pages/Home'
 import { Insights } from '@/pages/Insights'
 import { NotFound } from '@/pages/NotFound'
@@ -78,6 +79,7 @@ export function App() {
                   <Route path="/recurring" element={<Recurring />} />
                   <Route path="/recurring/new" element={<RecurringEditor />} />
                   <Route path="/recurring/:id" element={<RecurringEditor />} />
+                  <Route path="/connections/gmail" element={<GmailConnection />} />
                   <Route path="*" element={<NotFound />} />
                 </Route>
               </Routes>

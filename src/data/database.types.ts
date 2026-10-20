@@ -278,7 +278,16 @@ export type SourceConnectionRow = Timestamps & {
   user_id: string
   source_type: ImportSourceType
   label: string
-  status: 'active' | 'paused' | 'disconnected'
+  status: 'active' | 'paused' | 'needs_reconnect' | 'disconnected'
+  /** 'gmail' for a Gmail connection (migration 0004). Secrets never live in this table. */
+  provider: 'gmail' | null
+  account_email: string | null
+  scopes: string[]
+  connected_at: string | null
+  disconnected_at: string | null
+  last_checked_at: string | null
+  /** A short code such as invalid_grant — never message text. */
+  last_error_code: string | null
 }
 
 export type LedgerAuditRow = {

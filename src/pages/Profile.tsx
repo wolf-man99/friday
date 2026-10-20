@@ -1,4 +1,4 @@
-import { ChevronRight, Download, FileJson, Inbox, Landmark, LogOut, Repeat, ShieldAlert, Tags } from 'lucide-react'
+import { ChevronRight, Download, FileJson, Inbox, Landmark, LogOut, Mail, Repeat, ShieldAlert, Tags } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { signOut, useAuth } from '@/app/auth'
@@ -11,7 +11,7 @@ import { SelectField, TextField } from '@/components/ui/Field'
 import { InlineError } from '@/components/ui/States'
 import { useToast } from '@/components/ui/Toast'
 import { fetchAllEntries, fetchBackup } from '@/data/api'
-import { useAttention, useDeleteAllData, useDueOccurrences, useUpdateProfile } from '@/data/hooks'
+import { useAttention, useDeleteAllData, useDisconnectGmail, useDueOccurrences, useGmailConnection, useUpdateProfile } from '@/data/hooks'
 import { attentionCounts } from '@/features/insights/figures'
 import { accountsCsv, transactionsCsv } from '@/features/insights/exports'
 import { downloadFile, toCsv } from '@/lib/csv'
@@ -32,6 +32,7 @@ export function Profile() {
   const { session } = useAuth()
   const due = useDueOccurrences()
   const attention = useAttention()
+  const gmail = useGmailConnection()
   const updateProfile = useUpdateProfile()
   const toast = useToast()
   const [name, setName] = useState(profile.display_name ?? '')
@@ -151,6 +152,21 @@ export function Profile() {
               detail={toReview > 0 ? `${toReview} to review` : attention.data ? 'All clear' : 'Imports & checks'}
               highlight={toReview > 0}
             />
+            <NavRow
+              to="/connections/gmail"
+              icon={<Mail className="size-5" strokeWidth={2.25} />}
+              label="Gmail"
+              detail={
+                gmail.data?.status === 'active'
+                  ? 'Connected'
+                  : gmail.data?.status === 'needs_reconnect'
+                    ? 'Reconnect'
+                    : gmail.isSuccess
+                      ? 'Not connected'
+                      : 'Bank alerts'
+              }
+              highlight={gmail.data?.status === 'needs_reconnect'}
+            />
           </ul>
         </nav>
       </Card>
@@ -208,6 +224,8 @@ function NavRow({ to, icon, label, detail, highlight }: { to: string; icon: Reac
 function DeleteAllDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [typed, setTyped] = useState('')
   const remove = useDeleteAllData()
+  const gmail = useGmailConnection()
+  const disconnectGmail = useDisconnectGmail()
   const toast = useToast()
   const [error, setError] = useState<string | null>(null)
   return (
@@ -224,9 +242,11 @@ function DeleteAllDialog({ open, onClose }: { open: boolean; onClose: () => void
           variant="ink"
           block
           disabled={typed !== 'DELETE'}
-          loading={remove.isPending}
+          loading={remove.isPending || disconnectGmail.isPending}
           onClick={async () => {
             try {
+              // Revoke Gmail access with Google first; deleting the data removes it from Friday regardless.
+              if (gmail.data) await disconnectGmail.mutateAsync().catch(() => undefined)
               await remove.mutateAsync()
               toast({ message: 'All your Friday data was deleted.' })
               setTyped('')
@@ -242,8 +262,8 @@ function DeleteAllDialog({ open, onClose }: { open: boolean; onClose: () => void
     >
       <div className="flex flex-col gap-4">
         <p>
-          This permanently removes every account, transaction, transfer and recurring item, and resets your categories to
-          the defaults. It can’t be undone — export a backup first if you might want it.
+          This permanently removes every account, transaction, transfer and recurring item, disconnects Gmail, and resets
+          your categories to the defaults. It can’t be undone — export a backup first if you might want it.
         </p>
         <p className="text-sm text-muted">Your login stays. To close your login too, delete the user in the Supabase dashboard.</p>
         <TextField label='Type "DELETE" to confirm' value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />

@@ -35,5 +35,17 @@ jobs:
       PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
-      - name: Migrations + ledger, RLS, recurring, capture and upgrade tests
+      - name: Migrations + ledger, RLS, recurring, capture, Gmail storage and upgrade tests
         run: scripts/test-db.sh
+
+  functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check the Gmail Edge Functions
+        run: deno check --config supabase/functions/tests/deno.json supabase/functions/gmail-connection/index.ts supabase/functions/gmail-oauth-callback/index.ts supabase/functions/_dev/serve.ts
+      - name: OAuth state, callback errors, cross-user isolation, token secrecy, disconnects
+        run: deno test --config supabase/functions/tests/deno.json --allow-env supabase/functions/tests/

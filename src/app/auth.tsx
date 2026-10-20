@@ -43,7 +43,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   const { session, loading } = useAuth()
   const location = useLocation()
   if (loading) return <Splash />
-  if (!session) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
+  // The hash too: Gmail's connection page receives its one-time ticket there.
+  if (!session) return <Navigate to="/login" replace state={{ from: location.pathname + location.search + location.hash }} />
   return children
 }
 

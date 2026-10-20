@@ -9,6 +9,7 @@ import type { UtcRange } from '@/lib/dates'
 import { isOutdatedSchema } from '@/lib/errors'
 import type { ValidEntry } from '@/lib/entry'
 import * as api from './api'
+import * as gmail from './gmail'
 import type {
   AccountInsert,
   CategoryInsert,
@@ -45,6 +46,7 @@ export const keys = {
   rules: ['recurring', 'rules'] as const,
   due: ['recurring', 'due'] as const,
   resolved: ['recurring', 'resolved'] as const,
+  gmail: ['gmail'] as const,
 }
 
 // --- Reads ------------------------------------------------------------------------
@@ -415,5 +417,41 @@ export function useDeleteAllData() {
   return useMutation({
     mutationFn: api.deleteAllMyData,
     onSuccess: () => client.invalidateQueries(),
+  })
+}
+
+// --- Gmail connection ----------------------------------------------------------
+
+export function useGmailConnection() {
+  return useQuery({ queryKey: keys.gmail, queryFn: gmail.fetchGmailConnection })
+}
+
+export function useStartGmail() {
+  return useMutation({ mutationFn: gmail.startGmailConnection })
+}
+
+export function useCompleteGmail() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: gmail.completeGmailConnection,
+    onSettled: () => client.invalidateQueries({ queryKey: keys.gmail }),
+  })
+}
+
+export function useDisconnectGmail() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: gmail.disconnectGmail,
+    onSettled: () => client.invalidateQueries({ queryKey: keys.gmail }),
+  })
+}
+
+/** On demand only: previews a few alert emails; records nothing. */
+export function useGmailTestFetch() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (limit?: number) => gmail.testGmailFetch(limit),
+    // A check updates "last checked", or finds the access was revoked.
+    onSettled: () => client.invalidateQueries({ queryKey: keys.gmail }),
   })
 }

@@ -34,8 +34,9 @@ Do this once before relying on Friday, and again after schema changes:
   after, and it leaves all totals immediately).
 - **Everything:** Profile → *Delete all my data…* permanently removes accounts,
   transactions, transfers, recurring items, import evidence (`source_events`,
-  `source_connections`) and the audit trail for the signed-in user and resets
-  categories to the defaults. A later redelivery of an old import is then
+  `source_connections`), Gmail access (revoked with Google first, then the
+  encrypted token deleted) and the audit trail for the signed-in user and
+  resets categories to the defaults. A later redelivery of an old import is then
   treated as new.
 - **The login itself:** Supabase dashboard → *Authentication → Users* → delete
   the user. Database rows cascade from `auth.users`.
@@ -51,3 +52,9 @@ under your plan's retention period.
   the repository and the hosting provider's client-side environment variables.
   If either has been shared somewhere it shouldn't have been, rotate it in the
   Supabase dashboard (*Project Settings → API keys* / *Database*).
+- The Gmail functions' secrets (Google client secret, token encryption key —
+  see [`gmail-connection.md`](gmail-connection.md#function-secrets)) live only in
+  Supabase's Edge Function secrets. Rotating the Google client secret is safe;
+  changing `GMAIL_TOKEN_ENCRYPTION_KEY` makes stored Gmail access unreadable, so
+  everyone reconnects. A Gmail connection can always be cut off from Google's
+  side at myaccount.google.com/permissions.

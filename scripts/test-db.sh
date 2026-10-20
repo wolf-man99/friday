@@ -36,7 +36,7 @@ if (( ${#migrations[@]} > 1 )); then
   apply "${migrations[-1]}" >/dev/null
 fi
 
-for test in ledger_test capture_test ledger_model_test upgrade_check; do
+for test in ledger_test capture_test ledger_model_test gmail_test upgrade_check; do
   psql -v ON_ERROR_STOP=1 -q -t -A -d "$DB" -f "tests/db/$test.sql" 2>&1 \
     | sed -e 's/^psql:[^ ]* NOTICE:  //' -e '/^$/d'
 done

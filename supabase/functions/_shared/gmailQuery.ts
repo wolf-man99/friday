@@ -9,6 +9,7 @@ export const DEFAULT_ALERT_SENDERS: readonly string[] = [
   'icicibank.com',
   'axisbank.com',
   'sbi.co.in',
+  'sbicard.com',
   'kotak.com',
   'yesbank.in',
   'indusind.com',
@@ -18,10 +19,21 @@ export const DEFAULT_ALERT_SENDERS: readonly string[] = [
   'sc.com',
   'hsbc.co.in',
   'americanexpress.com',
+  'aexp.com',
+  'bankofbaroda.co.in',
+  'bobcard.co.in',
+  'pnb.co.in',
+  'canarabank.com',
+  'unionbankofindia.co.in',
+  'rblbank.com',
+  'dbs.com',
+  'getonecard.app',
   'paytm.com',
   'phonepe.com',
   'amazonpay.in',
   'mobikwik.com',
+  'jupiter.money',
+  'fi.money',
 ]
 
 /** Words that appear in debit/credit alerts. */
@@ -93,4 +105,22 @@ export function senderAllowed(fromHeader: string, rules: readonly string[]): boo
 
 export function headerValue(headers: { name?: string; value?: string }[] | undefined, name: string): string {
   return headers?.find((header) => header.name?.toLowerCase() === name.toLowerCase())?.value ?? ''
+}
+
+/**
+ * Alert emails from these senders between two instants (an imported month).
+ * Wider words than the preview's, and promotions aren't excluded: some banks'
+ * alerts land there, and the alert reader skips real promotions itself.
+ */
+export function buildImportQuery(senders: readonly string[], from: Date, to: Date): string {
+  const safeSenders = senders.filter(isSenderRule)
+  if (safeSenders.length === 0) throw new Error('No valid alert senders configured')
+  const words = [...ALERT_KEYWORDS, 'paid', 'received', 'sent', 'deposited', 'spent', 'debit', 'credit']
+  return [
+    `from:(${safeSenders.join(' OR ')})`,
+    `(${[...new Set(words)].join(' OR ')})`,
+    `after:${Math.floor(from.getTime() / 1000)}`,
+    `before:${Math.ceil(to.getTime() / 1000)}`,
+    '-category:social',
+  ].join(' ')
 }

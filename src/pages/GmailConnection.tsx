@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/Toast'
 import { callbackErrorMessage, gmailErrorMessage, type GmailConnection as Connection, type GmailTestFetch } from '@/data/gmail'
 import { useCompleteGmail, useDisconnectGmail, useGmailConnection, useGmailTestFetch, useStartGmail } from '@/data/hooks'
 import { formatDateTime } from '@/features/detail/describe'
+import { PastTransactions } from '@/features/gmailImport/PastTransactions'
 import { friendlyError } from '@/lib/errors'
 
 export const GMAIL_PATH = '/connections/gmail'
@@ -67,7 +68,7 @@ export function GmailConnection() {
       ) : connection.isError ? (
         <InlineError message={friendlyError(connection.error)} onRetry={() => void connection.refetch()} />
       ) : connection.data ? (
-        <Connected connection={connection.data} />
+        <Connected connection={connection.data} justConnected={complete.isSuccess} />
       ) : (
         <NotConnected />
       )}
@@ -145,7 +146,7 @@ function NotConnected() {
   )
 }
 
-function Connected({ connection }: { connection: Connection }) {
+function Connected({ connection, justConnected }: { connection: Connection; justConnected: boolean }) {
   const { timeZone } = useSettings()
   const toast = useToast()
   const disconnect = useDisconnectGmail()
@@ -212,6 +213,7 @@ function Connected({ connection }: { connection: Connection }) {
 
       {check.isError && <InlineError message={gmailErrorMessage(check.error)} />}
       {check.data && !needsReconnect && <Preview result={check.data} timeZone={timeZone} />}
+      {!needsReconnect && <PastTransactions prompt={justConnected} />}
 
       <ConfirmDialog
         open={confirming}
@@ -294,8 +296,9 @@ function WhatFridayReads() {
           delete or change mail.
         </Point>
         <Point icon={<MailSearch className="size-5" strokeWidth={2.25} />}>
-          <strong>Alert emails only.</strong> Friday searches for transaction alerts from bank, card and wallet senders,
-          and reads only their sender, subject, date and Gmail’s short preview.
+          <strong>Alert emails only.</strong> Friday searches only for transaction alerts from bank, card and wallet
+          senders. To import them it reads each alert’s text and keeps just the transaction: amount, date, account,
+          merchant and reference — never the email itself.
         </Point>
         <Point icon={<Lock className="size-5" strokeWidth={2.25} />}>
           <strong>Your access stays on Friday’s server, encrypted.</strong> This app never sees it. Disconnecting deletes

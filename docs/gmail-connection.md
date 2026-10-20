@@ -137,6 +137,52 @@ token and discards it.
   decrypt (e.g. a changed `GMAIL_TOKEN_ENCRYPTION_KEY`) answers
   `credential_unreadable` and is kept; reconnecting replaces it.
 
+## Importing past months
+
+Right after connecting (and any time later on the Gmail page), Friday offers to
+import **this month and the two before it** — the person picks any of them.
+
+1. **Find** (`import-start`): one Gmail search per month — allowlisted
+   senders, alert words, `after:`/`before:` the month's bounds in the person's
+   time zone. At most 1,500 emails per import (the newest).
+2. **Read** (`import-scan`, 15 emails per request): each email is fetched in
+   full, read in memory by `supabase/functions/_shared/alerts.ts`, and only
+   the facts are stored (`friday_private.gmail_import_items`): bank or card,
+   last digits, amount, direction, date, merchant, reference, sender check.
+   OTPs, statements, promotions and other non-transactions are skipped.
+3. **Confirm accounts** (`import-accounts`, `import-confirm`): the bank
+   accounts, cards and wallets the emails mention, each with a suggestion —
+   the Friday account it was linked to before or looks like, or a new one.
+   The person links, creates (optionally with the balance on the first
+   imported day), ignores, or sends a number's transactions to Review. Links
+   are remembered (`import_account_aliases`), so a later import only asks
+   about new numbers (a new bank shows up as a new account to confirm).
+4. **Record** (`import-run`, 40 per request): every email goes through the
+   ledger's import boundary (`ingest_source_event_for`), which records what is
+   confident and complete and sends the rest to Review with a reason —
+   refunds, transfers and card bill payments, unknown accounts, unverified
+   senders, low confidence, and likely duplicates of entries already in
+   Friday. The same email is never recorded twice, however many imports
+   include it; a payment app's email about a bank's UPI payment is linked to
+   it by the UPI reference instead of being counted again.
+5. **Undo** (`import-undo`): deletes the entries that import recorded (except
+   any a refund now depends on), takes its items out of Review and forgets its
+   evidence, so the months can be imported again. Hand-typed entries are never
+   touched; accounts it created stay.
+
+**Balances stay right.** When older history is imported into an account that
+started tracking later, the account gets a `balance_from` date (its old start)
+and its starting balance is restated as of that date, so today's balance is
+unchanged; entries before it count in spending, not in the balance. New
+accounts start on the first imported day.
+
+**Reading alerts** (`alerts.ts`) knows the common wordings of ~25 Indian banks,
+card issuers and wallets. A transaction is recorded automatically only when
+the sender's domain signed the email (DKIM/DMARC), the account number, amount,
+direction and date are clear and there's one transaction amount; everything
+else waits in Review. Formats it doesn't know are skipped or reviewed, never
+guessed — tell Friday's developer which emails were missed and add a rule.
+
 ## Logging
 
 Functions log one JSON line per event with an allowlist of fields (`action`,

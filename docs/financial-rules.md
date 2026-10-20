@@ -69,6 +69,12 @@ the formula. The opening balance is the balance before the entries recorded
 in Friday; "Tracking since" is a label (imported evidence dated before it goes
 to review, since it is probably already in the opening balance).
 
+**Imported history.** Importing past months from Gmail into an account that
+started later sets its *balance from* date to its old start and restates the
+starting balance as of that date, so the balance doesn't change. Entries dated
+before *balance from* count in spending and insights but not in the balance
+(the starting balance already includes them).
+
 **Available money** on Home adds up active bank, wallet, cash and other
 accounts. **Card dues** are shown separately and never folded into it; the
 "after card dues" figure is labelled as such. It is deliberately not called

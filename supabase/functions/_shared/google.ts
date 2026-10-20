@@ -238,3 +238,50 @@ export async function getMessageMetadata(
     headers: Array.isArray(body.payload?.headers) ? body.payload.headers : [],
   }
 }
+
+/** Every message id matching a search, newest first, up to `cap`. */
+export async function listAllMessageIds(
+  fetchFn: Fetch,
+  endpoints: GoogleEndpoints,
+  accessToken: string,
+  query: string,
+  cap: number,
+): Promise<{ ids: string[]; truncated: boolean }> {
+  const ids: string[] = []
+  let pageToken: string | null = null
+  do {
+    const params = new URLSearchParams({ q: query, maxResults: String(Math.min(500, cap - ids.length + 1)), fields: 'messages/id,nextPageToken' })
+    if (pageToken) params.set('pageToken', pageToken)
+    const body = await gmailGet(fetchFn, `${endpoints.gmail}/users/me/messages?${params}`, accessToken)
+    for (const message of Array.isArray(body.messages) ? body.messages : []) {
+      if (typeof message?.id === 'string') ids.push(message.id)
+    }
+    pageToken = typeof body.nextPageToken === 'string' ? body.nextPageToken : null
+  } while (pageToken && ids.length <= cap)
+  return { ids: ids.slice(0, cap), truncated: ids.length > cap || pageToken !== null }
+}
+
+export interface MessagePart {
+  mimeType?: string
+  headers?: { name?: string; value?: string }[]
+  body?: { data?: string; size?: number }
+  parts?: MessagePart[]
+}
+
+export interface FullMessage {
+  id: string
+  internalDate: number
+  payload: MessagePart
+}
+
+/** One message with its text parts, read in memory only (to parse an alert). */
+export async function getFullMessage(fetchFn: Fetch, endpoints: GoogleEndpoints, accessToken: string, id: string): Promise<FullMessage> {
+  if (!/^[A-Za-z0-9]+$/.test(id)) throw new GoogleError('bad_response')
+  const params = new URLSearchParams({ format: 'full', fields: 'id,internalDate,payload' })
+  const body = await gmailGet(fetchFn, `${endpoints.gmail}/users/me/messages/${id}?${params}`, accessToken)
+  return {
+    id: String(body.id ?? id),
+    internalDate: Number(body.internalDate) || Date.now(),
+    payload: body.payload && typeof body.payload === 'object' ? body.payload : {},
+  }
+}

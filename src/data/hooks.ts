@@ -47,6 +47,7 @@ export const keys = {
   due: ['recurring', 'due'] as const,
   resolved: ['recurring', 'resolved'] as const,
   gmail: ['gmail'] as const,
+  gmailImport: ['gmail', 'import'] as const,
 }
 
 // --- Reads ------------------------------------------------------------------------
@@ -453,5 +454,31 @@ export function useGmailTestFetch() {
     mutationFn: (limit?: number) => gmail.testGmailFetch(limit),
     // A check updates "last checked", or finds the access was revoked.
     onSettled: () => client.invalidateQueries({ queryKey: keys.gmail }),
+  })
+}
+
+/** The latest Gmail import (its progress is driven from the Gmail page). */
+export function useGmailImport() {
+  return useQuery({ queryKey: keys.gmailImport, queryFn: gmail.fetchLatestImport })
+}
+
+export function useGmailImportAccounts(jobId: string | null) {
+  return useQuery({
+    queryKey: [...keys.gmailImport, 'accounts', jobId],
+    queryFn: () => gmail.importAccounts(jobId!),
+    enabled: jobId !== null,
+    staleTime: Infinity,
+  })
+}
+
+/** Any import step; afterwards the import, the ledger and accounts are re-read. */
+export function useGmailImportStep<A, R>(step: (arg: A) => Promise<R>) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: step,
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: keys.gmailImport })
+      void client.invalidateQueries({ queryKey: keys.ledger })
+    },
   })
 }

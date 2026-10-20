@@ -493,7 +493,12 @@ export function AccountEditor() {
 function BalanceBreakdown({ account }: { account: AccountBalanceRow }) {
   const { label, amount } = describeBalance(account)
   const card = isLiability(account.type)
-  const rows = breakdownRows(account, `Opening (${formatDate(account.opening_date, { withYear: true })})`)
+  const rows = breakdownRows(
+    account,
+    account.balance_from
+      ? `Balance on ${formatDate(account.balance_from, { withYear: true })}`
+      : `Opening (${formatDate(account.opening_date, { withYear: true })})`,
+  )
   return (
     <Card tone="paper" shadow="lg" padded={false} className="overflow-hidden">
       <div className={cn('flex items-center gap-3 p-4', TONE_BG[toneOf(account.color)])}>
@@ -530,6 +535,13 @@ function BalanceBreakdown({ account }: { account: AccountBalanceRow }) {
           </div>
         </dl>
         {card && <p className="pt-1 text-xs text-muted">For cards, a negative balance is what you owe.</p>}
+        {account.balance_from && (
+          <p className="pt-1 text-xs text-muted">
+            Entries from {formatDate(account.opening_date, { withYear: true })} to{' '}
+            {formatDate(account.balance_from, { withYear: true })} were imported as history: they count in your spending, not in
+            this balance.
+          </p>
+        )}
         {account.pending_minor !== 0 && (
           <p className="pt-1 text-sm">
             Includes <span className="tabular font-semibold">{formatMoney(account.pending_minor, { sign: 'always' })}</span> still pending.

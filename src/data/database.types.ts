@@ -176,6 +176,34 @@ export type AccountBalanceRow = {
   outstanding_minor: number | null
   /** Cards with a limit only: limit − outstanding (negative when over the limit). */
   available_credit_minor: number | null
+  /**
+   * Set when older history was imported (migration 0005): the balance counts
+   * entries from this date on; earlier ones count in spending only.
+   */
+  balance_from?: string | null
+}
+
+export type GmailImportStatus = 'listing' | 'scanning' | 'confirm_accounts' | 'importing' | 'done' | 'undone' | 'cancelled' | 'failed'
+
+export type GmailImportJobRow = {
+  id: string
+  user_id: string
+  connection_id: string
+  months: string[]
+  status: GmailImportStatus
+  total_messages: number
+  scanned: number
+  skipped: number
+  recorded: number
+  matched: number
+  review: number
+  ignored: number
+  truncated: boolean
+  error_code: string | null
+  created_at: string
+  updated_at: string
+  finished_at: string | null
+  undone_at: string | null
 }
 
 export type LedgerEntryRow = Timestamps & {
@@ -372,6 +400,7 @@ export type Database = {
       source_events: Table<SourceEventRow, never, never>
       source_connections: Table<SourceConnectionRow, never, never>
       ledger_audit: Table<LedgerAuditRow, never, never>
+      gmail_import_jobs: Table<GmailImportJobRow, never, never>
     }
     Views: {
       account_balances: View<AccountBalanceRow>

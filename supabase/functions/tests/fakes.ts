@@ -4,18 +4,22 @@
 // talks to a network.
 
 import type { GmailConfig } from '../_shared/config.ts'
-import { pkceChallenge, TokenCipher } from '../_shared/crypto.ts'
+import { pkceChallenge, toBase64Url, TokenCipher } from '../_shared/crypto.ts'
 import { DEFAULT_ALERT_SENDERS } from '../_shared/gmailQuery.ts'
 import { GMAIL_READONLY_SCOPE } from '../_shared/google.ts'
 import type { LogFields, Logger } from '../_shared/http.ts'
 import {
   StoreError,
+  type AccountDecision,
   type CompleteResult,
   type ConsumedState,
   type Credentials,
   type DeletedToken,
+  type DiscoveredAccount,
   type GmailStore,
   type PendingGrant,
+  type ScannedItem,
+  type StoredAlert,
 } from '../_shared/store.ts'
 
 // Distinctive values, so a leak anywhere is easy to spot.
@@ -53,6 +57,15 @@ export function cipher(): Promise<TokenCipher> {
 
 interface StateRow { userId: string; verifier: string; browserHash: string; expiresAt: number; usedAt: number | null }
 interface GrantRow { userId: string; email: string; scopes: string[]; enc: string; browserHash: string; expiresAt: number }
+export interface FakeImportJob {
+  userId: string
+  months: string[]
+  status: string
+  truncated: boolean
+  items: Map<string, ScannedItem | null>
+  decisions: AccountDecision[]
+}
+
 export interface ConnectionRow {
   id: string
   userId: string
@@ -235,6 +248,124 @@ export class MemoryStore implements GmailStore {
     return Promise.resolve(out)
   }
 
+  // --- Importing (a simple model; the real rules are tested in SQL) ---------------
+
+  readonly jobs = new Map<string, FakeImportJob>()
+
+  private job(userId: string, jobId: string, states: string[]): FakeImportJob {
+    const job = this.jobs.get(jobId)
+    if (!job || job.userId !== userId) throw new StoreError('That import no longer exists', 'P0002')
+    if (!states.includes(job.status)) throw new StoreError(`That import is ${job.status}, so it can't do that now`, '55000')
+    return job
+  }
+
+  private alerts(job: FakeImportJob): StoredAlert[] {
+    return [...job.items.values()].flatMap((item) => (item && 'alert' in item ? [item.alert] : []))
+  }
+
+  importBegin(userId: string, months: string[]) {
+    this.check('importBegin')
+    if (!this.connections.some((c) => c.userId === userId && c.status === 'active')) {
+      return Promise.reject(new StoreError('Connect Gmail first', '55000'))
+    }
+    if ([...this.jobs.values()].some((j) => j.userId === userId && ['listing', 'scanning', 'confirm_accounts', 'importing'].includes(j.status))) {
+      return Promise.reject(new StoreError('An import is already in progress', '55000'))
+    }
+    const jobId = crypto.randomUUID()
+    const sorted = [...new Set(months)].sort()
+    this.jobs.set(jobId, { userId, months: sorted, status: 'listing', truncated: false, items: new Map(), decisions: [] })
+    return Promise.resolve({
+      jobId,
+      ranges: sorted.map((month) => {
+        const [y, m] = month.split('-').map(Number)
+        return { month, start: new Date(Date.UTC(y, m - 1, 1)), end: new Date(Math.min(Date.UTC(y, m, 1), this.now)) }
+      }),
+    })
+  }
+
+  importAddMessages(userId: string, jobId: string, messageIds: string[], truncated: boolean) {
+    const job = this.job(userId, jobId, ['listing'])
+    for (const id of messageIds) job.items.set(id, null)
+    job.truncated = truncated
+    job.status = job.items.size === 0 ? 'done' : 'scanning'
+    return Promise.resolve(job.items.size)
+  }
+
+  importPending(userId: string, jobId: string, limit: number) {
+    const job = this.job(userId, jobId, ['scanning'])
+    const messageIds = [...job.items.entries()].filter(([, v]) => v === null).map(([k]) => k).slice(0, limit)
+    return Promise.resolve({ messageIds, timeZone: 'Asia/Kolkata' })
+  }
+
+  importSave(userId: string, jobId: string, items: ScannedItem[]) {
+    const job = this.job(userId, jobId, ['scanning'])
+    for (const item of items) if (job.items.get(item.messageId) === null) job.items.set(item.messageId, item)
+    const pending = [...job.items.values()].filter((v) => v === null).length
+    if (pending === 0) job.status = this.alerts(job).length > 0 ? 'confirm_accounts' : 'done'
+    return Promise.resolve({ scanned: job.items.size - pending, total: job.items.size, status: job.status })
+  }
+
+  importAccounts(userId: string, jobId: string): Promise<DiscoveredAccount[]> {
+    const job = this.job(userId, jobId, ['confirm_accounts', 'importing', 'done'])
+    const groups = new Map<string, DiscoveredAccount>()
+    for (const alert of this.alerts(job)) {
+      const key = `${alert.institutionKey}/${alert.instrument}/${alert.accountMask ?? ''}`
+      const group = groups.get(key) ?? {
+        institutionKey: alert.institutionKey,
+        institutionName: alert.institutionName,
+        instrument: alert.instrument,
+        accountMask: alert.accountMask ?? '',
+        messages: 0,
+        firstAt: alert.occurredAt,
+        lastAt: alert.occurredAt,
+        linkedAccountId: null,
+        linkedIgnored: false,
+        suggestedAccountId: null,
+        suggestedName: `${alert.institutionName}${alert.accountMask ? ` ••${alert.accountMask}` : ''}`,
+        suggestedType: alert.instrument === 'credit_card' ? 'credit_card' : alert.instrument === 'wallet' ? 'wallet' : alert.instrument === 'unknown' ? null : 'bank',
+      }
+      group.messages++
+      groups.set(key, group)
+    }
+    return Promise.resolve([...groups.values()])
+  }
+
+  async importApplyAccounts(userId: string, jobId: string, decisions: AccountDecision[]) {
+    const job = this.job(userId, jobId, ['confirm_accounts'])
+    for (const group of await this.importAccounts(userId, jobId)) {
+      const found = decisions.find((d) => d.institutionKey === group.institutionKey && d.instrument === group.instrument && d.accountMask === group.accountMask)
+      if (!found) throw new StoreError(`Choose what to do with ${group.institutionName}`, '22023')
+    }
+    job.decisions = decisions
+    job.status = 'importing'
+    return { created: decisions.filter((d) => d.action === 'create').length, linked: decisions.filter((d) => d.action === 'link').length, kept: 0 }
+  }
+
+  importRun(userId: string, jobId: string, _limit: number) {
+    const job = this.job(userId, jobId, ['importing'])
+    job.status = 'done'
+    return Promise.resolve({ processed: this.alerts(job).length, remaining: 0, status: 'done' })
+  }
+
+  importUndo(userId: string, jobId: string) {
+    const job = this.job(userId, jobId, ['done'])
+    job.status = 'undone'
+    return Promise.resolve({ removed: this.alerts(job).length, kept: 0 })
+  }
+
+  importCancel(userId: string, jobId: string) {
+    const job = this.job(userId, jobId, ['listing', 'scanning', 'confirm_accounts'])
+    job.status = 'cancelled'
+    job.items.clear()
+    return Promise.resolve()
+  }
+
+  importFail(userId: string, jobId: string, _errorCode: string) {
+    const job = this.job(userId, jobId, ['listing', 'scanning'])
+    job.status = 'failed'
+    return Promise.resolve()
+  }
+
   /** Every value stored anywhere, for secrecy checks. */
   dump(): string {
     return JSON.stringify({
@@ -242,6 +373,7 @@ export class MemoryStore implements GmailStore {
       grants: [...this.grants.entries()],
       connections: this.connections,
       credentials: [...this.credentials.entries()],
+      jobs: [...this.jobs.entries()].map(([id, job]) => [id, { ...job, items: [...job.items.entries()] }]),
     })
   }
 }
@@ -257,6 +389,14 @@ export interface Mail {
   snippet: string
   body: string
   internalDate: string
+  /** Send the body as HTML (else plain text). */
+  html?: boolean
+  /** Authentication-Results header; default: DKIM pass for the sender's domain. */
+  auth?: string
+}
+
+function utf8Base64Url(text: string): string {
+  return toBase64Url(new TextEncoder().encode(text))
 }
 
 interface IssuedCode {
@@ -397,8 +537,21 @@ export class FakeGoogle {
     if (path === '/profile') return Response.json({ emailAddress: mailbox })
     if (path === '/messages') {
       const max = Number(url.searchParams.get('maxResults') ?? 100)
-      // Like Gmail, from: matching is loose: return everything and let Friday filter.
-      return Response.json({ messages: mail.slice(0, max).map((m) => ({ id: m.id, threadId: m.id })), resultSizeEstimate: mail.length })
+      // Like Gmail, from: matching is loose: return everything in the dates
+      // asked for (after:/before: in epoch seconds), newest first, and let Friday filter.
+      const q = url.searchParams.get('q') ?? ''
+      const after = Number(q.match(/\bafter:(\d+)/)?.[1] ?? 0) * 1000
+      const before = Number(q.match(/\bbefore:(\d+)/)?.[1] ?? Infinity) * 1000
+      const matching = mail
+        .filter((m) => Number(m.internalDate) >= after && Number(m.internalDate) < before)
+        .sort((a, b) => Number(b.internalDate) - Number(a.internalDate))
+      const offset = Number(url.searchParams.get('pageToken') ?? 0)
+      const page = matching.slice(offset, offset + max)
+      return Response.json({
+        messages: page.map((m) => ({ id: m.id, threadId: m.id })),
+        resultSizeEstimate: matching.length,
+        ...(offset + max < matching.length ? { nextPageToken: String(offset + max) } : {}),
+      })
     }
     const message = mail.find((m) => `/messages/${m.id}` === path)
     if (!message) return Response.json({ error: { code: 404 } }, { status: 404 })
@@ -410,12 +563,17 @@ export class FakeGoogle {
       internalDate: message.internalDate,
       snippet: message.snippet,
       payload: {
+        mimeType: 'multipart/alternative',
         headers: [
           { name: 'From', value: message.from },
           { name: 'Subject', value: message.subject },
           { name: 'Date', value: new Date(Number(message.internalDate)).toUTCString() },
+          {
+            name: 'Authentication-Results',
+            value: message.auth ?? `mx.google.com; dkim=pass header.i=@${message.from.match(/@([^>\s]+)/)?.[1] ?? ''}; spf=pass`,
+          },
         ],
-        body: { data: btoa(message.body) },
+        parts: [{ mimeType: message.html ? 'text/html' : 'text/plain', body: { data: utf8Base64Url(message.body) } }],
       },
     }
     if (url.searchParams.get('format') === 'metadata' && url.searchParams.get('fields')) {

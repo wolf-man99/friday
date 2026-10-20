@@ -22,7 +22,7 @@ function psql(sql: string) {
 const userId = (email: string) => psql(`select id from auth.users where email = '${email}'`)
 
 async function issuedByGoogle() {
-  return (await (await fetch(`${GOOGLE}/__inspect`)).json()) as { refreshTokens: string[]; revoked: string[] }
+  return (await (await fetch(`${GOOGLE}/__inspect?email=asha@gmail.com`)).json()) as { refreshTokens: string[]; revoked: string[] }
 }
 
 async function signUp(page: Page, user: { email: string; name: string }) {

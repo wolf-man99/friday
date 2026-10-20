@@ -16,6 +16,10 @@ const disconnect = vi.fn()
 const testFetch = vi.fn()
 
 vi.mock('@/app/settings', () => ({ useSettings: () => ({ timeZone: 'Asia/Kolkata' }) }))
+// Importing past months has its own tests (src/features/gmailImport).
+vi.mock('@/features/gmailImport/PastTransactions', () => ({
+  PastTransactions: ({ prompt }: { prompt?: boolean }) => <p>past transactions{prompt ? ': offered' : ''}</p>,
+}))
 
 // Minimal stand-ins for TanStack mutations: track pending/error/data like the real thing.
 vi.mock('@/data/hooks', async () => {
@@ -40,6 +44,7 @@ vi.mock('@/data/hooks', async () => {
     return {
       ...state,
       isError: state.error !== null,
+      isSuccess: state.data !== undefined,
       mutateAsync,
       mutate: (arg: A, options?: { onSuccess?: (data: R) => void }) => {
         mutateAsync(arg).then((data) => options?.onSuccess?.(data), () => undefined)
@@ -143,6 +148,7 @@ describe('Gmail connection — coming back from Google', () => {
     renderPage('/connections/gmail#ticket=abcDEF123')
     await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent(/^\/connections\/gmail$/))
     expect(await screen.findByText('Gmail connected · asha@gmail.com')).toBeInTheDocument()
+    expect(await screen.findByText('past transactions: offered')).toBeInTheDocument()
     expect(complete).toHaveBeenCalledTimes(1)
     expect(complete).toHaveBeenCalledWith('abcDEF123')
   })
@@ -196,6 +202,7 @@ describe('Gmail connection — connected', () => {
     renderPage()
     expect(screen.getByRole('heading', { name: 'asha@gmail.com' })).toBeInTheDocument()
     expect(screen.getByText('Connected · read-only')).toBeInTheDocument()
+    expect(screen.getByText('past transactions')).toBeInTheDocument()
     expect(screen.getByText('Not yet')).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: 'Preview recent alerts' }))

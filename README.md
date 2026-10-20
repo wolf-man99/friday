@@ -31,8 +31,10 @@ went — in a loud, tactile, Riff-inspired interface.
   yet; see [`docs/ledger-model.md`](docs/ledger-model.md).
 - **Gmail connection (foundation)** — connect Gmail read-only (Google OAuth,
   `gmail.readonly` only), preview recent bank-alert emails, disconnect any
-  time. The refresh token stays encrypted on the server; nothing from email is
-  recorded yet. See [`docs/gmail-connection.md`](docs/gmail-connection.md).
+  time. The refresh token stays encrypted on the server. Import up to three
+  past months: Friday finds your bank accounts, cards and wallets in the alert
+  emails, you confirm each, it records what's clear and sends the rest to
+  Review, with Undo. See [`docs/gmail-connection.md`](docs/gmail-connection.md).
 - **Insights** — spending by category, monthly trend, comparisons with the
   previous period, plain-language observations; everything drills down.
 - **Recurring** — rent, salary, subscriptions. Friday prompts when they're due;
@@ -66,6 +68,7 @@ order**:
 | `20261019000000_capture_service.sql` | Quick Add save service: merchant field, idempotent `record_entry`, `update_entry` with conflict detection, `set_entry_voided`, default account, audit trail. Additive — existing data is kept — and safe to re-run. |
 | `20261020000000_ledger_model.sql` | Ledger model: refunds and reversals, statuses, sources, wallet accounts, institution and credit limit, the import boundary (`source_events`) and review-queue functions, net-of-refund reports. Additive and safe to re-run; existing entries become posted, manual entries with unchanged amounts and balances. It also archives the seeded "Refunds" **income** category (refunds now reduce spending); restore it from Categories if you want it back. |
 | `20261021000000_gmail_connection.sql` | Gmail connection foundation: connection metadata on `source_connections`, a private schema for OAuth state and encrypted tokens, and server-only functions. Additive and safe to re-run. Only needed if you'll connect Gmail. |
+| `20261022000000_gmail_import.sql` | Importing past months from Gmail: import jobs, remembered account links, balances that stay exact when older history arrives (`balance_from`), and server-only import steps. Additive and safe to re-run. |
 
 **These are the only files to run in Supabase.** The SQL under `tests/db/` is for
 local testing; it creates fake users and refuses to run in a Supabase project.

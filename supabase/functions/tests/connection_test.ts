@@ -365,8 +365,8 @@ Deno.test('test-fetch: searches alert senders and words, metadata only, bounded'
   assert.equal(body.recorded, false, 'nothing is recorded')
   assert.match(body.query, /^from:\(hdfcbank\.net OR .*\) \(debited OR .*\) newer_than:30d -category:promotions -category:social$/)
   assert.deepEqual(Object.keys(body.messages[0]).sort(), ['from', 'id', 'receivedAt', 'snippet', 'subject'])
-  assert.equal(body.messages[0].subject, 'Rs.100.00 debited from a/c **1234')
-  assert.equal(body.messages[0].receivedAt, '2026-10-01T00:00:00.000Z')
+  assert.equal(body.messages[0].subject, 'Rs.129.00 debited from a/c **1234', 'newest first')
+  assert.equal(body.messages[0].receivedAt, '2026-10-30T00:00:00.000Z')
   assert.ok(!JSON.stringify(body).includes('FULL BODY'), 'never the message body')
 
   const list = h.google.requests.find((r) => r.url.pathname.endsWith('/messages'))!

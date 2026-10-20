@@ -59,7 +59,75 @@ export interface DeletedToken {
   revocable: boolean
 }
 
-export interface GmailStore {
+// --- Importing past months -------------------------------------------------------
+
+export interface ImportRange {
+  month: string
+  start: Date
+  end: Date
+}
+
+/** What an alert email said, as stored for the import (never the email itself). */
+export interface StoredAlert {
+  institutionKey: string
+  institutionName: string
+  instrument: string
+  accountMask: string | null
+  kind: string
+  transferHint: string | null
+  amountMinor: number
+  currency: string
+  occurredAt: string
+  merchant: string | null
+  reference: string | null
+  entryStatus: string
+  categoryHint: string | null
+  confidence: number
+  senderVerified: boolean
+}
+
+export type ScannedItem = { messageId: string; skip: string } | { messageId: string; alert: StoredAlert }
+
+export interface DiscoveredAccount {
+  institutionKey: string
+  institutionName: string
+  instrument: string
+  accountMask: string
+  messages: number
+  firstAt: string | null
+  lastAt: string | null
+  linkedAccountId: string | null
+  linkedIgnored: boolean
+  suggestedAccountId: string | null
+  suggestedName: string
+  suggestedType: string | null
+}
+
+export interface AccountDecision {
+  institutionKey: string
+  instrument: string
+  accountMask: string
+  action: 'link' | 'create' | 'ignore' | 'review'
+  accountId?: string
+  name?: string
+  type?: string
+  openingBalanceMinor?: number
+}
+
+export interface ImportStore {
+  importBegin(userId: string, months: string[]): Promise<{ jobId: string; ranges: ImportRange[] }>
+  importAddMessages(userId: string, jobId: string, messageIds: string[], truncated: boolean): Promise<number>
+  importPending(userId: string, jobId: string, limit: number): Promise<{ messageIds: string[]; timeZone: string }>
+  importSave(userId: string, jobId: string, items: ScannedItem[]): Promise<{ scanned: number; total: number; status: string }>
+  importAccounts(userId: string, jobId: string): Promise<DiscoveredAccount[]>
+  importApplyAccounts(userId: string, jobId: string, decisions: AccountDecision[]): Promise<{ created: number; linked: number; kept: number }>
+  importRun(userId: string, jobId: string, limit: number): Promise<{ processed: number; remaining: number; status: string }>
+  importUndo(userId: string, jobId: string): Promise<{ removed: number; kept: number }>
+  importCancel(userId: string, jobId: string): Promise<void>
+  importFail(userId: string, jobId: string, errorCode: string): Promise<void>
+}
+
+export interface GmailStore extends ImportStore {
   begin(userId: string, stateHash: string, codeVerifier: string, browserHash: string): Promise<void>
   consume(stateHash: string): Promise<ConsumedState>
   storePendingGrant(grant: PendingGrant): Promise<void>
@@ -159,5 +227,77 @@ export class SupabaseGmailStore implements GmailStore {
   async disconnect(userId: string) {
     const rows = await this.rows('gmail_disconnect', { p_user_id: userId })
     return rows.map((row) => ({ refreshTokenEnc: String(row.refresh_token_enc), revocable: row.revocable === true }))
+  }
+
+  // --- Importing past months -------------------------------------------------------
+
+  async importBegin(userId: string, months: string[]) {
+    const rows = await this.rows('gmail_import_begin', { p_user_id: userId, p_months: months })
+    if (rows.length === 0) throw new StoreError('Import could not start', null)
+    return {
+      jobId: String(rows[0].job_id),
+      ranges: rows.map((row) => ({ month: String(row.month), start: new Date(String(row.range_start)), end: new Date(String(row.range_end)) })),
+    }
+  }
+
+  async importAddMessages(userId: string, jobId: string, messageIds: string[], truncated: boolean) {
+    const [row] = await this.rows('gmail_import_add_messages', {
+      p_user_id: userId,
+      p_job_id: jobId,
+      p_message_ids: messageIds,
+      p_truncated: truncated,
+    })
+    return Number(row ?? 0)
+  }
+
+  async importPending(userId: string, jobId: string, limit: number) {
+    const rows = await this.rows('gmail_import_pending', { p_user_id: userId, p_job_id: jobId, p_limit: limit })
+    return { messageIds: rows.map((row) => String(row.message_id)), timeZone: String(rows[0]?.time_zone ?? 'Asia/Kolkata') }
+  }
+
+  async importSave(userId: string, jobId: string, items: ScannedItem[]) {
+    const [row] = await this.rows('gmail_import_save', { p_user_id: userId, p_job_id: jobId, p_items: items })
+    return { scanned: Number(row?.scanned ?? 0), total: Number(row?.total ?? 0), status: String(row?.status ?? 'scanning') }
+  }
+
+  async importAccounts(userId: string, jobId: string) {
+    const rows = await this.rows('gmail_import_accounts', { p_user_id: userId, p_job_id: jobId })
+    return rows.map((row) => ({
+      institutionKey: String(row.institution_key),
+      institutionName: String(row.institution_name),
+      instrument: String(row.instrument),
+      accountMask: String(row.account_mask ?? ''),
+      messages: Number(row.messages),
+      firstAt: (row.first_at as string | null) ?? null,
+      lastAt: (row.last_at as string | null) ?? null,
+      linkedAccountId: (row.linked_account_id as string | null) ?? null,
+      linkedIgnored: row.linked_ignored === true,
+      suggestedAccountId: (row.suggested_account_id as string | null) ?? null,
+      suggestedName: String(row.suggested_name ?? row.institution_name),
+      suggestedType: (row.suggested_type as string | null) ?? null,
+    }))
+  }
+
+  async importApplyAccounts(userId: string, jobId: string, decisions: AccountDecision[]) {
+    const [row] = await this.rows('gmail_import_apply_accounts', { p_user_id: userId, p_job_id: jobId, p_decisions: decisions })
+    return { created: Number(row?.created_accounts ?? 0), linked: Number(row?.linked_accounts ?? 0), kept: Number(row?.kept_balances ?? 0) }
+  }
+
+  async importRun(userId: string, jobId: string, limit: number) {
+    const [row] = await this.rows('gmail_import_run', { p_user_id: userId, p_job_id: jobId, p_limit: limit })
+    return { processed: Number(row?.processed ?? 0), remaining: Number(row?.remaining ?? 0), status: String(row?.status ?? 'importing') }
+  }
+
+  async importUndo(userId: string, jobId: string) {
+    const [row] = await this.rows('gmail_import_undo', { p_user_id: userId, p_job_id: jobId })
+    return { removed: Number(row?.removed_entries ?? 0), kept: Number(row?.kept_entries ?? 0) }
+  }
+
+  async importCancel(userId: string, jobId: string) {
+    await this.rows('gmail_import_cancel', { p_user_id: userId, p_job_id: jobId })
+  }
+
+  async importFail(userId: string, jobId: string, errorCode: string) {
+    await this.rows('gmail_import_fail', { p_user_id: userId, p_job_id: jobId, p_error_code: errorCode })
   }
 }

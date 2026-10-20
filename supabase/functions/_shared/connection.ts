@@ -7,7 +7,9 @@
 //   disconnect  → { disconnected, revoked }: deletes credentials, revokes them
 //   test-fetch  → { query, messages }: a few recent alert emails' metadata;
 //                 nothing is stored and no transaction is created
+//   import-*    → importing past months (see importer.ts)
 
+import { gmailAccess } from './access.ts'
 import type { GmailConfig } from './config.ts'
 import { isToken, pkceChallenge, randomToken, refreshTokenContext, sha256Hex, type TokenCipher } from './crypto.ts'
 import { buildAlertQuery, headerValue, senderAllowed } from './gmailQuery.ts'
@@ -17,11 +19,11 @@ import {
   GoogleError,
   googleEndpoints,
   listMessageIds,
-  refreshAccessToken,
   revokeToken,
   type Fetch,
 } from './google.ts'
 import { corsHeaders, json, type Logger } from './http.ts'
+import { handleImport, IMPORT_ACTIONS, type ImportAction } from './importer.ts'
 import { StoreError, type GmailStore } from './store.ts'
 
 export interface ConnectionDeps {
@@ -37,8 +39,8 @@ export interface ConnectionDeps {
 export const TEST_FETCH_DEFAULT = 5
 export const TEST_FETCH_MAX = 20
 
-type Action = 'start' | 'complete' | 'disconnect' | 'test-fetch'
-const ACTIONS: readonly Action[] = ['start', 'complete', 'disconnect', 'test-fetch']
+type Action = 'start' | 'complete' | 'disconnect' | 'test-fetch' | ImportAction
+const ACTIONS: readonly Action[] = ['start', 'complete', 'disconnect', 'test-fetch', ...IMPORT_ACTIONS]
 
 export async function handleConnection(req: Request, deps: ConnectionDeps): Promise<Response> {
   const cors = corsHeaders(req.headers.get('origin'), deps.config.allowedOrigins)
@@ -73,11 +75,19 @@ export async function handleConnection(req: Request, deps: ConnectionDeps): Prom
         return reply(200, await disconnect(userId, deps))
       case 'test-fetch':
         return await testFetch(userId, body, deps, reply)
+      default:
+        return await handleImport(action, userId, body, deps, reply)
     }
   } catch (error) {
     if (error instanceof StoreError && error.code === 'P0001') {
       deps.log('gmail_connection_failed', { action, reason: 'rate_limited' })
       return reply(429, { error: 'too_many_attempts', message: error.message })
+    }
+    // The database's own refusals are written for people (no values in them).
+    const refusal = error instanceof StoreError ? STORE_REFUSALS[error.code ?? ''] : undefined
+    if (error instanceof StoreError && refusal) {
+      deps.log('gmail_connection_failed', { action, reason: refusal.error })
+      return reply(refusal.status, { error: refusal.error, message: error.message })
     }
     if (error instanceof GoogleError && error.failure === 'invalid_client') {
       // Friday's own Google settings are wrong; nobody's connection is touched.
@@ -97,6 +107,12 @@ export async function handleConnection(req: Request, deps: ConnectionDeps): Prom
  * Revokes tokens with Google. Only ever pass tokens the database said are safe
  * to revoke: Google ends the whole grant for that Gmail account.
  */
+const STORE_REFUSALS: Record<string, { status: number; error: string }> = {
+  '22023': { status: 400, error: 'invalid' },
+  '55000': { status: 409, error: 'not_now' },
+  P0002: { status: 404, error: 'not_found' },
+}
+
 async function revokeSealed(sealedTokens: (string | null)[], ownerId: string, deps: ConnectionDeps): Promise<boolean> {
   const endpoints = googleEndpoints(deps.config.googleTestOrigin)
   let all = true
@@ -191,41 +207,11 @@ async function testFetch(
   deps: ConnectionDeps,
   reply: (status: number, body: unknown) => Response,
 ) {
-  const credentials = await deps.store.getCredentials(userId)
-  if (!credentials) {
-    return reply(409, { error: 'not_connected', message: 'Gmail isn’t connected.' })
-  }
   const limit = Math.min(Math.max(Math.trunc(Number(body.limit)) || TEST_FETCH_DEFAULT, 1), TEST_FETCH_MAX)
   const lookbackDays = Math.trunc(Number(body.lookbackDays)) || 30
-  const endpoints = googleEndpoints(deps.config.googleTestOrigin)
-
-  let refreshToken: string
-  try {
-    refreshToken = await deps.cipher.decrypt(credentials.refreshTokenEnc, refreshTokenContext(userId))
-  } catch {
-    // A wrong encryption key (a server setting) or a damaged row: keep the
-    // credential — deleting it would lose access that may still be valid.
-    deps.log('gmail_connection_failed', { action: 'test-fetch', reason: 'decrypt_failed' })
-    return reply(409, {
-      error: 'credential_unreadable',
-      message: 'Friday can’t read its stored Gmail access. Connect Gmail again to replace it.',
-    })
-  }
-
-  let accessToken: string
-  try {
-    accessToken = await refreshAccessToken(deps.fetch, endpoints, {
-      clientId: deps.config.clientId,
-      clientSecret: deps.config.clientSecret,
-      refreshToken,
-    })
-  } catch (error) {
-    if (!(error instanceof GoogleError && error.failure === 'invalid_grant')) throw error
-    // Revoked at Google or expired: this credential is useless.
-    await deps.store.markNeedsReconnect(userId, credentials.connectionId, credentials.refreshTokenEnc, 'invalid_grant')
-    deps.log('gmail_needs_reconnect', { action: 'test-fetch', reason: 'invalid_grant' })
-    return reply(409, { error: 'needs_reconnect', message: 'Google no longer accepts Friday’s access. Connect Gmail again.' })
-  }
+  const access = await gmailAccess(userId, deps, 'test-fetch')
+  if (!access.ok) return reply(access.status, access.body)
+  const { accessToken, credentials, endpoints } = access
 
   const query = buildAlertQuery(deps.config.alertSenders, lookbackDays)
   const { ids, estimate } = await listMessageIds(deps.fetch, endpoints, accessToken, query, limit)
